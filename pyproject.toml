@@ -1,0 +1,56 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "slr-slr"
+version = "0.1.0"
+description = "SLR SLR (Single Lens Reflex Sightless Label Reader): wearable grocery finder for visually impaired shoppers"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "Team #4 Colorado Dreaming (GEEN 1400, Fall 2026)" }]
+dependencies = [
+    "pydantic>=2.5",
+    "pyyaml>=6",
+    "websockets>=13",
+    "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+# Laptop: detector, TTS, debug view, mDNS
+server = [
+    "opencv-python>=4.8",
+    "ultralytics>=8.3",
+    "piper-tts>=1.2",
+    "zeroconf>=0.130",
+    "sounddevice>=0.4.6",   # sim device plays through laptop speakers
+]
+# Raspberry Pi Zero 2 W. No ML runtimes here (PRD rule 4). picamera2 comes from apt.
+device = [
+    "sounddevice>=0.4.6",
+    "gpiozero>=2.0",
+    "lgpio>=0.2; platform_machine=='aarch64'",
+    "adafruit-circuitpython-ads1x15>=2.2",
+    "simplejpeg>=1.7",
+    "zeroconf>=0.130",
+]
+training = [
+    "ultralytics>=8.3",
+    "opencv-python>=4.8",
+    "albumentations>=1.4",   # blur + JPEG augmentation during training
+]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+]
+
+[project.scripts]
+slr = "slr.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["slr*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"

@@ -1,0 +1,79 @@
+# Device (Raspberry Pi Zero 2 W) configuration. Pins live in controls.yaml.
+
+device_id: slr-01
+
+server:
+  host: 10.42.0.1        # laptop hotspot address; "auto" = discover via mDNS (_slrslr._tcp)
+  ws_port: 8765
+  udp_port: 8766
+  http_port: 8767
+  discovery_timeout_s: 5.0
+
+camera:
+  backend: picamera2     # picamera2 | opencv | file
+  index: 0               # opencv backend: webcam index
+  file: null             # file backend: video file or folder of images
+  width: 640
+  height: 480
+
+streaming:
+  max_fps: 10
+  ack_timeout_ms: 300
+  max_datagram_bytes: 60000
+  jpeg_quality_start: 75
+  jpeg_quality_step: 10
+  jpeg_quality_min: 40
+  jpeg_recover_ratio: 0.6   # step quality back up once frames are under 60% of the limit
+  jpeg_recover_frames: 10
+  video_weak_s: 3.0         # FR-56
+
+audio:
+  backend: sounddevice   # sounddevice | aplay | null
+  device: null           # ALSA / PortAudio device name or index; null = system default
+  sample_rate: 22050
+  blocksize: 512
+
+volume:
+  source: adc            # adc | buttons | keyboard
+  adc:
+    i2c_address: 0x48
+    channel: 0
+    gain: 2              # ADS1115 gain 2 = +/-2.048 V
+  # Raw ADS1115 counts at dial min / middle / max (FR-44). Defaults are computed from the
+  # measured 4.64k / 6.04k / 7.0k dial with a 5.6k fixed resistor to 3.3 V.
+  # Re-run `slr device calibrate-volume` on the real hardware.
+  calibration:
+    raw_min: 23924
+    raw_mid: 27397
+    raw_max: 29332
+    curve: piecewise     # piecewise | log
+  sample_hz: 20
+  median_n: 5
+  hysteresis_steps: 0.5
+  settle_ms: 300
+  min_db: -30.0          # gain at level 1; level 0 is mute
+  max_db: 0.0            # gain at level 10
+  initial_level: 6
+
+connection:
+  reconnect_initial_s: 0.5
+  reconnect_max_s: 4.0   # keeps recovery well under the 10 s NFR-10 target
+  heartbeat_s: 2.0
+  http_timeout_s: 5.0
+
+shutdown_command: [sudo, shutdown, -h, now]
+
+paths:
+  clip_cache: data/device_clips
+  system_clips: device_assets/system_clips
+  state_dir: data/device_state
+
+# Overrides applied by `slr sim` (and `slr device --sim`): webcam, keyboard, laptop speakers.
+sim:
+  server:
+    host: 127.0.0.1
+  camera:
+    backend: opencv
+  volume:
+    source: keyboard
+  shutdown_command: []

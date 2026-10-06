@@ -1,0 +1,77 @@
+# Phrase catalog (FR-61). Every spoken phrase is a template rendered to a WAV clip on the laptop.
+# Placeholders: {item} {next} {other} are class ids and are spoken using config/classes*.yaml.
+# {h} and {v} come from the `directions` table below. Clips regenerate automatically when
+# the rendered text changes (the clip file name includes a hash of the text).
+#
+# priority (FR-63): system > confirmation > guidance > info. A higher priority cue
+# interrupts a lower one. Guidance cues never queue: the newest one replaces any waiting one.
+
+directions:
+  left: Left
+  slightly_left: Slightly left
+  straight: Straight ahead
+  slightly_right: Slightly right
+  right: Right
+  high: High shelf
+  eye: Eye level
+  low: Low shelf
+
+phrases:
+  ready:               {priority: confirmation, text: "Ready."}
+  paused:              {priority: confirmation, text: "Paused."}
+  standby_hint:        {priority: info, text: "Paused. Turn the switch on to continue."}
+  list_empty:          {priority: confirmation, text: "Your shopping list is empty."}
+  item_announce:       {priority: confirmation, text: "Item {n} of {total}: {item}."}
+  item_announce_found: {priority: confirmation, text: "Item {n} of {total}: {item}. Already found."}
+  searching:           {priority: confirmation, text: "Searching for {item}."}
+  search_stopped:      {priority: confirmation, text: "Search stopped."}
+  not_seeing:          {priority: guidance, text: "Not seeing {item}. Turn slowly."}
+  found:               {priority: confirmation, text: "{item} found."}
+  direction:           {priority: guidance, text: "{h}. {v}."}
+  direction_h:         {priority: guidance, text: "{h}."}
+  within_reach:        {priority: confirmation, text: "Within reach. {item} straight ahead."}
+  checked_off_next:    {priority: confirmation, text: "{item} checked off. Next: {next}."}
+  checked_off_done:    {priority: confirmation, text: "{item} checked off. That was the last item on your list."}
+  lost:                {priority: confirmation, text: "Lost it."}
+  wrong_item:          {priority: confirmation, text: "That's {other}, not {item}."}
+  getting_closer:      {priority: guidance, text: "Getting closer."}
+  identifying:         {priority: info, text: "Checking."}
+  identified:          {priority: confirmation, text: "This is {item}."}
+  identified_on_list:  {priority: confirmation, text: "This is {item}. It's on your list."}
+  not_sure:            {priority: confirmation, text: "Not sure. Hold it closer to the camera."}
+  not_sure_loss:       {priority: confirmation, text: "Not sure."}
+  status:              {priority: confirmation, text: "{found} of {total} items found. Current item: {item}."}
+  status_done:         {priority: confirmation, text: "All {total} items found."}
+  help:
+    priority: confirmation
+    text: >-
+      Shutter: press to search for the current item, press again to stop.
+      When an item is within reach, press the shutter to check it off.
+      Hold the shutter, or flip the mode switch forward, to identify what is in front of the camera.
+      Film advance lever: next item. Hold it for this help.
+      Rewind knob: previous item. Hold it to hear your progress.
+      Turn the dial to change the volume.
+      Mode switch off pauses the device.
+      Hold the shutter and the advance lever together for five seconds to shut down.
+
+# Clips that ship with the device and play without the server (FR-52, FR-55, FR-56, FR-45).
+# Render with `slr clips build-system`; output goes to device_assets/system_clips/<key>.wav
+system_phrases:
+  starting_up: "Starting up."
+  connected: "Connected."
+  connection_lost: "Connection lost. Reconnecting."
+  not_connected: "Not connected to the laptop yet."
+  camera_error: "Camera error."
+  video_weak: "Video connection weak."
+  shutting_down: "Shutting down."
+  volume_0: "Volume 0."
+  volume_1: "Volume 1."
+  volume_2: "Volume 2."
+  volume_3: "Volume 3."
+  volume_4: "Volume 4."
+  volume_5: "Volume 5."
+  volume_6: "Volume 6."
+  volume_7: "Volume 7."
+  volume_8: "Volume 8."
+  volume_9: "Volume 9."
+  volume_10: "Volume 10."

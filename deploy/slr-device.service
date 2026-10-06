@@ -1,0 +1,19 @@
+# Template: install_pi.sh fills in @REPO@ and @USER@ and installs it to /etc/systemd/system/.
+[Unit]
+Description=SLR SLR wearable device
+After=network-online.target sound.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@USER@
+WorkingDirectory=@REPO@
+ExecStart=@REPO@/.venv/bin/slr device
+Restart=always
+RestartSec=2
+Environment=PYTHONUNBUFFERED=1
+# keep the process small on the 512 MB Zero 2 W (NFR-13 target is < 150 MB)
+MemoryMax=200M
+
+[Install]
+WantedBy=multi-user.target

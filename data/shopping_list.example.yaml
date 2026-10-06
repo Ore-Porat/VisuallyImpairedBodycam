@@ -1,0 +1,10 @@
+# Example shopping list (FR-1). The live list is data/shopping_list.yaml (gitignored).
+# Edit with `slr list add <item>` etc. or the web editor at http://<laptop>:8767/
+current: 0
+items:
+  - name: pasta
+    status: pending
+  - name: coffee
+    status: pending
+  - name: rice
+    status: pending

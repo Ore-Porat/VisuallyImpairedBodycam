@@ -1,0 +1,57 @@
+# Physical input -> abstract event mapping (PRD 6.4). Change this when the wiring changes.
+# BCM pin numbers. Avoid GPIO 2/3 (I2C, ADS1115) and 18/19/20/21 (I2S DAC).
+
+backend: auto            # auto (gpio on a Pi, keyboard elsewhere) | gpio | keyboard
+
+buttons:
+  shutter: 17            # shutter release
+  advance: 27            # film advance lever
+  rewind: 22             # rewind knob
+button_pull_up: true
+button_debounce_ms: 50   # FR-40
+long_press_s: 0.8        # FR-30 shutter long press
+hold_s: 2.0              # help / status holds
+shutdown_hold_s: 5.0
+poll_hz: 100
+
+# What each button does. short = released before long_press_s, long = released after
+# long_press_s but before hold_s, hold = released after hold_s.
+actions:
+  shutter: {short: enter, long: identify, hold: identify}
+  advance: {short: next_item, long: next_item, hold: help}
+  rewind: {short: prev_item, long: prev_item, hold: status}
+shutdown_combo: [shutter, advance]
+
+mode_switch:
+  pin_a: 5
+  pin_b: 6
+  invert: false          # flip if "contact closed" reads as 0 instead of 1
+  debounce_ms: 80        # FR-42 switch_debounce_ms
+  positions:             # "ab" -> position (measured truth table, PRD section 5). Keep the quotes:
+    "00": "off"          # unquoted on/off would be read as true/false by YAML
+    "11": "on"
+    "01": "toggle"
+  toggle_latching: false # FR-43: set true if TOGGLE stays put instead of springing back
+
+identify_triggers:
+  mode_toggle: true
+  shutter_long_press: true
+
+# FR-46: used only if no ADS1115 is found at startup
+volume_buttons:
+  up: 23
+  down: 24
+
+# Sim mode keys (PRD 6.4)
+keyboard:
+  next_item: [right, n]
+  prev_item: [left, p]
+  enter: [space]
+  identify: [i]
+  mode_on: [o]
+  mode_off: [x]
+  volume_up: ["+", "="]
+  volume_down: ["-", "_"]
+  help: [h]
+  status: [s]
+  shutdown: [q]

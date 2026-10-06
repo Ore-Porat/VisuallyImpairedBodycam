@@ -1,0 +1,172 @@
+# SLR SLR: Single Lens Reflex Sightless Label Reader
+
+A vintage SLR film camera, worn on a neck strap, retrofitted with a Raspberry Pi Zero 2 W and a
+Pi camera. It helps blind and low-vision shoppers find the right item on a shelf, hands free,
+using only audio:
+
+- **Find mode** guides you to an item on your shopping list: *"Pasta found. Slightly left. Eye level."* ... *"Within reach. Pasta straight ahead."*
+- **Identify mode** tells you what you're holding: *"This is coffee. It's on your list."*
+
+Team #4 Colorado Dreaming, GEEN 1400 Fall 2026. The product spec is [`PRD.pdf`](PRD.pdf);
+implementation choices are in [`DECISIONS.md`](DECISIONS.md).
+
+```
+ SLR body (worn)                                     Laptop
+ Pi Camera -> Pi Zero 2 W  --UDP: JPEG frames------>  YOLO detector (GrocerEye-style model)
+ buttons, mode switch       <-UDP: frame acks------   guidance engine (pure logic)
+ volume dial (ADS1115)      --WebSocket: controls-->  session state + shopping list
+ headphones (I2S DAC)       <-WebSocket: cues------   Piper TTS clips, debug view, logs
+```
+
+The Pi only captures, plays audio and reads controls. Everything else runs on the laptop, fully
+offline.
+
+## Quick start: sim mode (laptop only)
+
+Sim mode runs the whole product on one laptop with the webcam, keyboard and speakers. It uses
+the same code paths as the real device, including UDP and WebSocket over localhost.
+
+```bash
+python -m venv .venv
+# Windows: .venv\Scripts\activate     macOS/Linux: source .venv/bin/activate
+pip install -e ".[server,dev]"
+# NVIDIA GPU (recommended): install the CUDA build of PyTorch first, e.g.
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+
+slr clips download-voice        # one-time Piper voice download (needs internet once)
+slr clips build-system          # render the device's local clips (already committed)
+slr list add bottle             # M1 uses the stock COCO model: try bottle, cup, cell phone...
+slr sim
+```
+
+Sim keys (in the terminal or the debug window):
+
+| Key | Event | What it does |
+|---|---|---|
+| `→` / `n` | next_item | next item on the list |
+| `←` / `p` | prev_item | previous item |
+| `Space` | enter | start search / check off when within reach / cancel |
+| `i` | identify | what is in front of the camera? |
+| `o` / `x` | mode_on / mode_off | ready / paused (the mode switch) |
+| `+` / `-` | volume | volume 0 to 10 |
+| `h` / `s` | help / status | spoken help, progress |
+| `q` | shutdown | quit |
+| `f` (debug window) | | save the current frame to `data/captured/` for training |
+
+Options: `slr sim --camera 1`, `slr sim --file some_video.mp4`, `--no-debug`, `--no-audio`.
+
+The first run renders a few hundred speech clips in the background (about a minute). After that
+they are cached in `data/clips/`.
+
+## Switching to the GrocerEye model
+
+Train it (see [`training/README.md`](training/README.md)), then edit `config/server.yaml`:
+
+```yaml
+model:
+  weights: models/grocereye_a/best.pt
+  classes_file: config/classes.yaml
+  imgsz: 320
+```
+
+Run `slr list classes` to see valid item names. Spoken names live in `config/classes.yaml`
+(`tomato_sauce: tomato sauce`).
+
+## Command reference
+
+| Command | Purpose |
+|---|---|
+| `slr sim` | server + simulated device on this laptop (FR-70) |
+| `slr server` | laptop server for the real device |
+| `slr device` | run the device (on the Pi; `--sim` for laptop backends) |
+| `slr device test-controls` | live readings of buttons, mode switch and volume dial (FR-76) |
+| `slr device calibrate-volume` | record dial min / middle / max (FR-44) |
+| `slr list show / add / remove / clear / reset / classes` | shopping list (FR-3, FR-6) |
+| `slr bench` | latency, FPS and UDP loss; compares resolutions (FR-75) |
+| `slr bench --log data/logs/session_*.jsonl` | same numbers from a real session log |
+| `slr replay <video-or-folder> --script s.yaml` | cue timeline for a recording (FR-73) |
+| `slr clips build / build-system / download-voice` | speech clips |
+
+The shopping list can also be edited by a helper in any browser, with a screen reader if needed,
+at `http://<laptop>:8767/` while the server runs (FR-4).
+
+Session logs (frames, detections, state changes, cues, latency, loss) go to `data/logs/` as JSONL
+(FR-72).
+
+## Raspberry Pi setup
+
+Hardware: Pi Zero 2 W, Raspberry Pi OS Lite 64-bit, Camera Module 3 (Wide recommended) on the
+22-pin Zero ribbon, PCM5102A-type I2S DAC with 3.5 mm jack, ADS1115 ADC.
+
+```bash
+git clone https://github.com/Ore-Porat/VisuallyImpairedBodycam.git && cd VisuallyImpairedBodycam
+sudo ./deploy/install_pi.sh     # apt deps, venv, I2C + I2S, sudoers for shutdown, systemd service
+sudo reboot
+```
+
+Then set `server.host` in `config/device.yaml` to the laptop's hotspot address (Windows mobile
+hotspot: usually `192.168.137.1`; Linux NetworkManager hotspot: `10.42.0.1`), or `auto` to find
+it via mDNS. The service `slr-device` starts on boot and says "Starting up", then "Ready" once
+connected (FR-50).
+
+No ML runtime is ever installed on the Pi.
+
+### Wiring (BCM numbering, set in `config/controls.yaml`)
+
+| Part | Pins | Notes |
+|---|---|---|
+| Shutter release | GPIO 17 to GND | momentary; internal pull-up |
+| Film advance lever | GPIO 27 to GND | momentary |
+| Rewind knob | GPIO 22 to GND | momentary |
+| Mode switch wire a / b | GPIO 5 / GPIO 6 | contact closed = 1. OFF=00, ON=11, TOGGLE=01. Flip `invert` if reversed |
+| ADS1115 | SDA GPIO 2, SCL GPIO 3, 3.3 V, GND | address 0x48, channel A0 |
+| Volume dial | divider: 3.3 V, 5.6k fixed, dial, GND; midpoint to A0 | any fixed resistor works, calibration handles it |
+| I2S DAC | GPIO 18, 19, 21 (+ 3.3 V, GND) | `dtoverlay=hifiberry-dac` |
+| Fallback volume buttons | GPIO 23 / 24 | used only if no ADS1115 is detected (FR-46) |
+
+Verify everything with `slr device test-controls`.
+
+### Calibration
+
+- **Volume dial:** `slr device calibrate-volume`, turn to min / middle / max when asked. Values are
+  saved to `config/device.yaml`. `curve: log` fits a log curve instead of piecewise lines.
+- **Vertical zones (shelf height):** the zones depend on how the camera tilts on the chest. Run
+  `slr server`, stand 1.5 m from a shelf, hold an item at eye level, and read the box center in the
+  debug view (the gray lines mark 0.33 and 0.66). Set `guidance.vertical_offset` in
+  `config/server.yaml` to `0.5 - <observed center y>`.
+- **Within reach:** with the item at arm's length straight ahead, note the box height and set
+  `guidance.reach_h` a little below it.
+- **Mirrored camera:** set `guidance.flip_horizontal: true` if "left" and "right" come out swapped.
+- **Confidence:** `training/pick_threshold.py --write` sets `guidance.conf_find` from held-out photos (TR-14).
+
+## Development
+
+```bash
+pytest                         # all tests; test_guidance.py is the most important
+```
+
+- `slr/server/guidance.py` is pure (no I/O, time passed in) and has thorough unit tests.
+- `tests/test_end_to_end.py` runs a real server and device over localhost with a scripted
+  detector, so the full pipeline is tested without a webcam or GPU.
+- Every tunable number is in `config/*.yaml`.
+
+Layout: `slr/common` (protocol, config), `slr/server` (detector, guidance, session, clips, debug
+view, list editor), `slr/device` (camera, controls, volume dial, audio, frame sender, control
+client), `training/` (dataset, train, evaluate, thresholds, capture), `deploy/` (Pi install).
+
+## Demo checklist
+
+1. Charge the device battery pack.
+2. Start the laptop hotspot; confirm the Pi joins (`ping` it) and UDP isn't blocked between clients.
+3. `slr server` on the laptop (debug view opens). Check the model line in the log.
+4. Power on the device: it says "Starting up", then "Ready".
+5. Mode switch to ON. Turn the volume dial and check "Volume N" in the headphones.
+6. `slr list reset` (or the web editor) and confirm the list with `slr list show`.
+7. Quick check: Identify a known item, then a Find of one item.
+8. After the demo: hold shutter + advance for 5 s to shut down safely.
+
+## Acceptance test
+
+Protocol: PRD section 13. Copy `reports/acceptance_TEMPLATE.md` to
+`reports/acceptance_<date>.md`, fill it in, and paste the numbers from
+`slr bench --log data/logs/<session>.jsonl`.

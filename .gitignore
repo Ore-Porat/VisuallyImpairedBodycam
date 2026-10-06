@@ -1,0 +1,31 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+build/
+dist/
+
+# Runtime data: ignored except the example shopping list
+data/*
+!data/shopping_list.example.yaml
+!data/replay/
+data/replay/*
+!data/replay/README.md
+
+# Model weights are large: ignore them, keep eval reports
+models/**/*.pt
+models/**/*.onnx
+models/**/*.weights
+models/**/*.json
+!models/**/eval_report*.md
+models/voices/
+runs/
+*.pt
+yolo*.pt
+
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
