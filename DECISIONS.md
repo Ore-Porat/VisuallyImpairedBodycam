@@ -4,7 +4,9 @@ Choices made where the PRD (`PRD.pdf`) was ambiguous or left room (PRD rule 7). 
 
 ## Repo and config
 - The PRD lives in the repo as `PRD.pdf` (the original document); this file and the README reference its section numbers.
-- `config/server.yaml` ships pointing at stock COCO `yolo11n.pt` + `config/classes_coco.yaml` (M1). Switch `model.weights`, `model.classes_file` and `model.imgsz: 320` to the trained GrocerEye model (see README).
+- `config/server.yaml` ships pointing at the trained Stage A model `models/grocereye_a/best.pt` (imgsz 320). Its weights (5.4 MB) are committed so a fresh clone works; other weights stay gitignored. Stock COCO (`yolo11n.pt` + `classes_coco.yaml`) remains available for pipeline debugging.
+- `conf_identify` is 0.75. On one held-out Freiburg test photo per class (static image, so all 5 burst frames agree), Identify gave 21/25 correct with 3 wrong at 0.6, and 21 correct, 2 not sure and 2 wrong at 0.75. Higher thresholds cost correct answers without removing all errors. The remaining errors are confidently wrong close-ups (e.g. milk vs tea); Stage B photos plus `pick_threshold.py` on the demo categories are the fix, not a higher global threshold.
+- `conf_find` stays at the PRD default 0.5: on the Freiburg test split no single threshold reaches 0.90 precision for all 25 classes (`reports/threshold_grocereye_a_*.md`). TR-14 should be run on our own held-out photos of the demo categories after Stage B.
 - `classes_file` is the authoritative list of item names for the shopping list (FR-2), so `slr list add` works without loading the model. The server warns at startup if the model's class names don't match.
 - Configs reject unknown keys (pydantic `extra="forbid"`) so typos fail loudly instead of being silently ignored.
 - Sim overrides live in a `sim:` section of `device.yaml`, deep-merged by `slr sim` / `slr device --sim`.

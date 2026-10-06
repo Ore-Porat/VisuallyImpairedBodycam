@@ -298,7 +298,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--duration", type=float, default=10.0, help="seconds per resolution")
     s.add_argument("--resolutions", default="640x480,416x312,320x240")
     s.add_argument("--source", default="webcam", help="webcam | sample | path to video/image/folder")
-    s.add_argument("--target", default="person", help="class to search for during the bench")
+    s.add_argument("--target", default="pasta",
+                   help="item to search for; hold one in view to measure capture->audio latency")
     s.add_argument("--log", help="analyze an existing session log instead")
     s.add_argument("--out", help="write a markdown report here")
     s.set_defaults(func=cmd_bench)

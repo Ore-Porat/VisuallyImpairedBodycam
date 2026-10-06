@@ -8,13 +8,13 @@ network:
   mdns: true             # advertise _slrslr._tcp so the device can find us (FR-51 P1)
 
 model:
-  # M1 uses a stock COCO model so the pipeline works before training finishes.
-  # After Stage A training: weights: models/grocereye_a/best.pt, classes_file: config/classes.yaml
+  # Stage A GrocerEye model (test mAP50 0.930, see models/grocereye_a/eval_report.md).
+  # Stock COCO for pipeline debugging: weights: yolo11n.pt, classes_file: config/classes_coco.yaml, imgsz: 640
   backend: ultralytics   # ultralytics | darknet_opencv | scripted
-  weights: yolo11n.pt
-  classes_file: config/classes_coco.yaml
+  weights: models/grocereye_a/best.pt
+  classes_file: config/classes.yaml
   device: auto           # auto picks CUDA, then Apple MPS, then CPU
-  imgsz: 640
+  imgsz: 320          # match the training size
   min_conf: 0.25         # detector floor; the guidance thresholds below decide what gets spoken
   half: false
   darknet_cfg: null      # darknet_opencv backend only
@@ -24,7 +24,7 @@ model:
 guidance:
   # Confidence thresholds. conf_find is rewritten by training/pick_threshold.py (TR-14).
   conf_find: 0.5
-  conf_identify: 0.6
+  conf_identify: 0.75   # Stage A held-out check: 0.6 -> 3/25 wrong, 0.75 -> 2/25 (see DECISIONS.md)
   conf_wrong_item: 0.7
 
   # Stable detection (PRD 8.2): target in >= stable_k of the last stable_n processed frames

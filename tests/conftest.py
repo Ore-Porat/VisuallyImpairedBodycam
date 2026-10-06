@@ -21,7 +21,7 @@ def frames_dir(tmp_path):
     return d
 
 
-def approach_script_detections(cls="bottle", n_far=10, n_near=40):
+def approach_script_detections(cls="pasta", n_far=10, n_near=40):
     """Target far on the left, then centered and big (within reach)."""
     far = [Detection.centered(cls, 0.9, 0.2, 0.5, 0.1, 0.15)]
     near = [Detection.centered(cls, 0.9, 0.5, 0.5, 0.2, 0.45)]
@@ -30,4 +30,4 @@ def approach_script_detections(cls="bottle", n_far=10, n_near=40):
 
 @pytest.fixture
 def scripted_detector():
-    return ScriptedDetector(frames=approach_script_detections(), names=["bottle", "cup"])
+    return ScriptedDetector(frames=approach_script_detections(), names=["pasta", "coffee"])

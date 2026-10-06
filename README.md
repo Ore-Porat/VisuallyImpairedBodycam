@@ -35,7 +35,7 @@ pip install -e ".[server,dev]"
 
 slr clips download-voice        # one-time Piper voice download (needs internet once)
 slr clips build-system          # render the device's local clips (already committed)
-slr list add bottle             # M1 uses the stock COCO model: try bottle, cup, cell phone...
+slr list add pasta              # see valid items with: slr list classes
 slr sim
 ```
 
@@ -43,8 +43,8 @@ Sim keys (in the terminal or the debug window):
 
 | Key | Event | What it does |
 |---|---|---|
-| `→` / `n` | next_item | next item on the list |
-| `←` / `p` | prev_item | previous item |
+| `â†’` / `n` | next_item | next item on the list |
+| `â†` / `p` | prev_item | previous item |
 | `Space` | enter | start search / check off when within reach / cancel |
 | `i` | identify | what is in front of the camera? |
 | `o` / `x` | mode_on / mode_off | ready / paused (the mode switch) |
@@ -58,16 +58,17 @@ Options: `slr sim --camera 1`, `slr sim --file some_video.mp4`, `--no-debug`, `-
 The first run renders a few hundred speech clips in the background (about a minute). After that
 they are cached in `data/clips/`.
 
-## Switching to the GrocerEye model
+## The model
 
-Train it (see [`training/README.md`](training/README.md)), then edit `config/server.yaml`:
+The server ships with the Stage A GrocerEye model (`models/grocereye_a/best.pt`, YOLO11n trained on
+the Freiburg "5K Groceries" data: **test mAP50 0.930** vs GrocerEye's 0.846, see
+[`models/grocereye_a/eval_report.md`](models/grocereye_a/eval_report.md)). It knows 25 categories
+(pasta, rice, coffee, tea, ...), not brands. It was trained on close-up photos of German packaging, so
+Identify mode (item held near the camera) works best; Stage B (our own photos) is needed for shelf
+distance and US packaging. See [`training/README.md`](training/README.md).
 
-```yaml
-model:
-  weights: models/grocereye_a/best.pt
-  classes_file: config/classes.yaml
-  imgsz: 320
-```
+To debug the pipeline with everyday objects instead, switch `config/server.yaml` to the stock COCO
+model: `weights: yolo11n.pt`, `classes_file: config/classes_coco.yaml`, `imgsz: 640`.
 
 Run `slr list classes` to see valid item names. Spoken names live in `config/classes.yaml`
 (`tomato_sauce: tomato sauce`).

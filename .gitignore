@@ -29,3 +29,7 @@ yolo*.pt
 Thumbs.db
 .idea/
 .vscode/
+
+# the released model is small enough to version (TR-15)
+!models/grocereye_a/best.pt
+!models/grocereye_a/results.csv

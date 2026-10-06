@@ -45,8 +45,8 @@ async def test_sim_pipeline_find_and_check_off(configs, frames_dir, scripted_det
     scfg, dcfg, ccfg = configs
     server = ServerApp(scfg, detector=scripted_detector, debug_view=False)
     await server.start()
-    server.shopping.add("bottle")
-    server.shopping.add("cup")
+    server.shopping.add("pasta")
+    server.shopping.add("coffee")
     server.core.reload_list()
     ws, udp, http = server.ports
     dcfg.server.ws_port, dcfg.server.udp_port, dcfg.server.http_port = ws, udp, http
@@ -72,10 +72,10 @@ async def test_sim_pipeline_find_and_check_off(configs, frames_dir, scripted_det
         device._on_control_event("enter")
         await wait_for(lambda: server.core.state.mode.value == "idle")
 
-        assert "Searching for bottle." in spoken
-        assert "Bottle found." in spoken
-        assert "Within reach. Bottle straight ahead." in spoken
-        assert "Bottle checked off. Next: cup." in spoken
+        assert "Searching for pasta." in spoken
+        assert "Pasta found." in spoken
+        assert "Within reach. Pasta straight ahead." in spoken
+        assert "Pasta checked off. Next: coffee." in spoken
         assert server.shopping.items[0].status == "found"   # persisted
         assert device.sender.frames_sent > 5
         assert device.sender.acks_received > 0
