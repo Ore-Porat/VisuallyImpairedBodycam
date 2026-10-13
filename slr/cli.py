@@ -193,12 +193,12 @@ def calibrate_volume(dcfg, config_dir: Path) -> None:
     """FR-44: record raw ADC readings at dial min / middle / max into config/device.yaml."""
     import statistics
 
-    from slr.device.volume_dial import Ads1115Reader
+    from slr.device.volume_dial import Mcp3008Reader
 
     try:
-        reader = Ads1115Reader(dcfg.volume.adc)
+        reader = Mcp3008Reader(dcfg.volume.adc)
     except Exception as e:
-        raise SystemExit(f"cannot read the ADS1115: {e}")
+        raise SystemExit(f"cannot read the MCP3008: {e}")
     points = {}
     for key, label in (("raw_min", "MINIMUM"), ("raw_mid", "the MIDDLE"), ("raw_max", "MAXIMUM")):
         input(f"Turn the volume dial to {label} and press Enter...")
@@ -224,7 +224,7 @@ def calibrate_volume(dcfg, config_dir: Path) -> None:
 def test_controls(dcfg, ccfg) -> None:
     """FR-76: live readings of every button, the mode switch and the volume dial."""
     from slr.device.controls import GpioControls
-    from slr.device.volume_dial import Ads1115Reader, VolumeCurve, VolumeFilter
+    from slr.device.volume_dial import Mcp3008Reader, VolumeCurve, VolumeFilter
 
     events: list[str] = []
     try:
@@ -233,7 +233,7 @@ def test_controls(dcfg, ccfg) -> None:
         raise SystemExit(f"GPIO unavailable (run this on the Pi): {e}")
     ctl.start()
     try:
-        reader = Ads1115Reader(dcfg.volume.adc)
+        reader = Mcp3008Reader(dcfg.volume.adc)
         filt = VolumeFilter(VolumeCurve(dcfg.volume.calibration), dcfg.volume)
     except Exception as e:
         print(f"volume dial: not available ({e})")

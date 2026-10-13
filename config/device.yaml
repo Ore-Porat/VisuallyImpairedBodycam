@@ -36,16 +36,17 @@ audio:
 volume:
   source: adc            # adc | buttons | keyboard
   adc:
-    i2c_address: 0x48
-    channel: 0
-    gain: 2              # ADS1115 gain 2 = +/-2.048 V
-  # Raw ADS1115 counts at dial min / middle / max (FR-44). Defaults are computed from the
-  # measured 4.64k / 6.04k / 7.0k dial with a 5.6k fixed resistor to 3.3 V.
+    spi_bus: 0           # MCP3008 on SPI0
+    spi_device: 0        # chip select: 0 = CE0 (GPIO 8), 1 = CE1 (GPIO 7)
+    channel: 0           # CH0
+    max_speed_hz: 1000000
+  # Raw MCP3008 counts (0..1023) at dial min / middle / max (FR-44). Defaults are computed from
+  # the measured 4.64k / 6.04k / 7.0k dial with a 5.6k fixed resistor, VREF = VDD = 3.3 V.
   # Re-run `slr device calibrate-volume` on the real hardware.
   calibration:
-    raw_min: 23924
-    raw_mid: 27397
-    raw_max: 29332
+    raw_min: 464
+    raw_mid: 531
+    raw_max: 569
     curve: piecewise     # piecewise | log
   sample_hz: 20
   median_n: 5

@@ -30,7 +30,7 @@ device = [
     "sounddevice>=0.4.6",
     "gpiozero>=2.0",
     "lgpio>=0.2; platform_machine=='aarch64'",
-    "adafruit-circuitpython-ads1x15>=2.2",
+    "spidev>=3.6; platform_system=='Linux'",
     "simplejpeg>=1.7",
     "zeroconf>=0.130",
 ]

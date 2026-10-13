@@ -54,8 +54,8 @@ Choices made where the PRD (`PRD.pdf`) was ambiguous or left room (PRD rule 7). 
 - Mode switch: OFF -> TOGGLE directly sends `mode_on` then `identify`. TOGGLE -> ON sends `mode_on`, which the server ignores while active.
 - FR-43 latching TOGGLE: with `toggle_latching: true` the device ignores buttons (except shutdown) while the switch sits in TOGGLE.
 - First-run tutorial (FR-57): the device sends `help` on its first connection and stores a flag in `data/device_state/first_run_done`.
-- Default pins (BCM): shutter 17, advance 27, rewind 22, switch a 5 / b 6, fallback volume buttons 23 / 24. These avoid I2C (2, 3) and I2S (18-21).
-- Default `device.yaml` volume calibration is computed from the measured resistances with a 5.6k divider at gain 2: 23924 / 27397 / 29332 counts.
+- Default pins (BCM): shutter 17, advance 27, rewind 22, switch a 5 / b 6, fallback volume buttons 23 / 24. These avoid SPI0 (7-11, MCP3008) and I2S (18-21).
+- Default `device.yaml` volume calibration is computed from the measured resistances with a 5.6k divider read by a 10-bit MCP3008 at VREF 3.3 V: 464 / 531 / 569 counts.
 
 ## Device
 - Camera stays started while idle (restarting picamera2 takes about 1 s); frames are only captured and sent while streaming (FR-54, NFR-12).

@@ -1,7 +1,7 @@
-"""Volume dial: ADS1115 reading, calibration curve, filtering, hysteresis (FR-44, FR-45, FR-46).
+"""Volume dial: MCP3008 reading, calibration curve, filtering, hysteresis (FR-44, FR-45, FR-46).
 
 The dial is a variable resistor (4.64k min, 6.04k middle, 7.0k max, roughly logarithmic) in a
-divider read by an ADS1115. ``VolumeCurve`` maps raw counts to a 0..1 dial position through the
+divider read by an MCP3008 (SPI). ``VolumeCurve`` maps raw counts to a 0..1 dial position through the
 three calibration points; ``VolumeFilter`` turns noisy samples into a steady 0..10 level.
 Both are pure and unit tested.
 """
@@ -154,35 +154,31 @@ class StepVolume:
         return None
 
 
-class Ads1115Reader:
+class Mcp3008Reader:
+    """10-bit MCP3008 on SPI (0..1023). Needs SPI enabled (/dev/spidevB.D)."""
+
     def __init__(self, cfg: AdcConfig):
-        import board
-        import busio
+        if not 0 <= cfg.channel <= 7:
+            raise ValueError(f"MCP3008 channel must be 0..7, got {cfg.channel}")
+        import spidev
 
-        i2c = busio.I2C(board.SCL, board.SDA)
-        try:  # adafruit-circuitpython-ads1x15 >= 3
-            from adafruit_ads1x15 import ADS1115, AnalogIn, ads1x15
-
-            ads = ADS1115(i2c, address=cfg.i2c_address)
-            pin = getattr(ads1x15.Pin, f"A{cfg.channel}")
-        except ImportError:  # 2.x API
-            import adafruit_ads1x15.ads1115 as ADS
-            from adafruit_ads1x15.analog_in import AnalogIn
-
-            ads = ADS.ADS1115(i2c, address=cfg.i2c_address)
-            pin = getattr(ADS, f"P{cfg.channel}")
-        ads.gain = cfg.gain
-        self.chan = AnalogIn(ads, pin)
-        self.read()  # raises if the chip is not there
+        self.spi = spidev.SpiDev()
+        self.spi.open(cfg.spi_bus, cfg.spi_device)
+        self.spi.max_speed_hz = cfg.max_speed_hz
+        self.spi.mode = 0
+        self.channel = cfg.channel
+        self.read()  # raises if SPI is not available
 
     def read(self) -> int:
-        return int(self.chan.value)
+        # start bit, single-ended + channel, then clock out 10 result bits
+        r = self.spi.xfer2([1, (8 + self.channel) << 4, 0])
+        return ((r[1] & 3) << 8) | r[2]
 
 
 class DialThread:
     """Samples the ADC at sample_hz on a background thread."""
 
-    def __init__(self, reader: Ads1115Reader, filt: VolumeFilter, sample_hz: float,
+    def __init__(self, reader: Mcp3008Reader, filt: VolumeFilter, sample_hz: float,
                  on_level: Callable[[int], None], on_announce: Callable[[int], None]):
         self.reader = reader
         self.filt = filt

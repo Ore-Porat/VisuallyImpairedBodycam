@@ -14,7 +14,7 @@ implementation choices are in [`DECISIONS.md`](DECISIONS.md).
  SLR body (worn)                                     Laptop
  Pi Camera -> Pi Zero 2 W  --UDP: JPEG frames------>  YOLO detector (GrocerEye-style model)
  buttons, mode switch       <-UDP: frame acks------   guidance engine (pure logic)
- volume dial (ADS1115)      --WebSocket: controls-->  session state + shopping list
+ volume dial (MCP3008)      --WebSocket: controls-->  session state + shopping list
  headphones (I2S DAC)       <-WebSocket: cues------   Piper TTS clips, debug view, logs
 ```
 
@@ -97,11 +97,11 @@ Session logs (frames, detections, state changes, cues, latency, loss) go to `dat
 ## Raspberry Pi setup
 
 Hardware: Pi Zero 2 W, Raspberry Pi OS Lite 64-bit, Camera Module 3 (Wide recommended) on the
-22-pin Zero ribbon, PCM5102A-type I2S DAC with 3.5 mm jack, ADS1115 ADC.
+22-pin Zero ribbon, PCM5102A-type I2S DAC with 3.5 mm jack, MCP3008 ADC (SPI).
 
 ```bash
 git clone https://github.com/Ore-Porat/VisuallyImpairedBodycam.git && cd VisuallyImpairedBodycam
-sudo ./deploy/install_pi.sh     # apt deps, venv, I2C + I2S, sudoers for shutdown, systemd service
+sudo ./deploy/install_pi.sh     # apt deps, venv, SPI + I2S, sudoers for shutdown, systemd service
 sudo reboot
 ```
 
@@ -120,10 +120,10 @@ No ML runtime is ever installed on the Pi.
 | Film advance lever | GPIO 27 to GND | momentary |
 | Rewind knob | GPIO 22 to GND | momentary |
 | Mode switch wire a / b | GPIO 5 / GPIO 6 | contact closed = 1. OFF=00, ON=11, TOGGLE=01. Flip `invert` if reversed |
-| ADS1115 | SDA GPIO 2, SCL GPIO 3, 3.3 V, GND | address 0x48, channel A0 |
-| Volume dial | divider: 3.3 V, 5.6k fixed, dial, GND; midpoint to A0 | any fixed resistor works, calibration handles it |
+| MCP3008 | CLK GPIO 11, DOUT GPIO 9 (MISO), DIN GPIO 10 (MOSI), CS GPIO 8 (CE0); VDD + VREF 3.3 V, AGND + DGND to GND | SPI0, channel CH0 |
+| Volume dial | divider: 3.3 V, 5.6k fixed, dial, GND; midpoint to CH0 | any fixed resistor works, calibration handles it |
 | I2S DAC | GPIO 18, 19, 21 (+ 3.3 V, GND) | `dtoverlay=hifiberry-dac` |
-| Fallback volume buttons | GPIO 23 / 24 | used only if no ADS1115 is detected (FR-46) |
+| Fallback volume buttons | GPIO 23 / 24 | used only if the MCP3008 can't be read (FR-46) |
 
 Verify everything with `slr device test-controls`.
 

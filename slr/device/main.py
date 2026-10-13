@@ -122,9 +122,9 @@ class DeviceApp:
         vc = self.cfg.volume
         if vc.source == "adc":
             try:
-                from slr.device.volume_dial import Ads1115Reader
+                from slr.device.volume_dial import Mcp3008Reader
 
-                reader = Ads1115Reader(vc.adc)
+                reader = Mcp3008Reader(vc.adc)
                 filt = VolumeFilter(VolumeCurve(vc.calibration), vc)
                 self.dial = DialThread(
                     reader, filt, vc.sample_hz,
@@ -133,7 +133,7 @@ class DeviceApp:
                 self.dial.start()
                 return False
             except Exception as e:
-                log.warning("no ADS1115 volume dial (%s); falling back to two volume buttons", e)
+                log.warning("no MCP3008 volume dial (%s); falling back to two volume buttons", e)
         self.step_volume = StepVolume(vc)
         self.step_volume.level = self.volume_level
         return vc.source != "keyboard"

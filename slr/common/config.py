@@ -195,15 +195,16 @@ class AudioConfig(_Model):
 
 
 class AdcConfig(_Model):
-    i2c_address: int = 0x48
+    spi_bus: int = 0
+    spi_device: int = 0         # chip select: 0 = CE0 (GPIO 8), 1 = CE1 (GPIO 7)
     channel: int = 0
-    gain: float = 2
+    max_speed_hz: int = 1_000_000
 
 
 class VolumeCalibration(_Model):
-    raw_min: float = 23924
-    raw_mid: float = 27397
-    raw_max: float = 29332
+    raw_min: float = 464
+    raw_mid: float = 531
+    raw_max: float = 569
     curve: Literal["piecewise", "log"] = "piecewise"
 
     @model_validator(mode="after")
