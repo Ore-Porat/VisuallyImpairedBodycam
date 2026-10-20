@@ -4,6 +4,8 @@ Two ways to use it:
 - live loopback: start a server and a sim device on this laptop, stream frames (webcam or a
   file) at each resolution for a few seconds, and report. Compares resolutions (PRD 7.1).
 - --log: analyze a session log from a real run (Pi + hotspot) for the same numbers.
+
+This is software used to create an intuitive gui to test the model
 """
 
 from __future__ import annotations
