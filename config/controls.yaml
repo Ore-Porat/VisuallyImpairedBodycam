@@ -1,17 +1,46 @@
 # Physical input -> abstract event mapping (PRD 6.4). Change this when the wiring changes.
 # BCM pin numbers. Avoid GPIO 7-11 (SPI0, MCP3008) and 18/19/20/21 (I2S DAC).
+#
+# What this file is for
+#   The camera body has three buttons, a three-position mode switch and (as a fallback) two
+#   volume buttons, all wired to the Raspberry Pi's GPIO pins. This file says which pin each
+#   control is on, how long a press must last to count as "short", "long" or "hold", and
+#   which event each press produces. Events are the words the rest of the software
+#   understands: enter, next_item, prev_item, identify, help, status, mode_on, mode_off,
+#   shutdown.
+#
+# Who reads it
+#   The device program on the Pi (slr/device/controls.py). In sim mode on a laptop the
+#   `keyboard` section at the bottom is used instead of the pins.
+#   "PRD 6.4" is a section of the product spec, PRD.pdf; FR-xx are its requirement numbers.
+#
+# Pin numbering
+#   "BCM" numbers are the chip's own GPIO numbers (GPIO 17, GPIO 27 ...), not the position
+#   of the pin on the 40-pin header. Pinout diagrams show both.
+#
+# How to edit safely
+#   Keep the indentation. Times are in seconds unless the name ends in _ms (milliseconds).
 
+# Which input library to use. "auto" picks real GPIO when running on a Pi and the keyboard
+# anywhere else, so the same file works on the device and on a laptop.
 backend: auto            # auto (gpio on a Pi, keyboard elsewhere) | gpio | keyboard
 
+# The three main buttons: GPIO pin number for each. Each button connects its pin to GND.
 buttons:
   shutter: 17            # shutter release
   advance: 27            # film advance lever
   rewind: 22             # rewind knob
+# Use the Pi's built-in pull-up resistor so an unpressed pin reads 1 and a pressed one reads 0.
 button_pull_up: true
+# Ignore any change shorter than this: mechanical switches "bounce" (flicker) for a few ms.
 button_debounce_ms: 50   # FR-40
+# A press held at least this long (seconds) is a "long" press.
 long_press_s: 0.8        # FR-30 shutter long press
+# A press held at least this long (seconds) is a "hold".
 hold_s: 2.0              # help / status holds
+# Both shutdown_combo buttons held together this long (seconds) powers the device off.
 shutdown_hold_s: 5.0
+# How many times per second the pins are read.
 poll_hz: 100
 
 # What each button does. short = released before long_press_s, long = released after
@@ -20,8 +49,11 @@ actions:
   shutter: {short: enter, long: identify, hold: identify}
   advance: {short: next_item, long: next_item, hold: help}
   rewind: {short: prev_item, long: prev_item, hold: status}
+# Which two buttons, held together, trigger a safe shutdown.
 shutdown_combo: [shutter, advance]
 
+# The three-position mode switch is read through two pins, a and b. Each reads 0 or 1, so
+# the pair forms a code like "01". The `positions` table says what each code means.
 mode_switch:
   pin_a: 5
   pin_b: 6
@@ -33,9 +65,10 @@ mode_switch:
     "01": "toggle"
   toggle_latching: false # FR-43: set true if TOGGLE stays put instead of springing back
 
+# Which actions start Identify mode ("what am I holding?"). Both can be on at once.
 identify_triggers:
-  mode_toggle: true
-  shutter_long_press: true
+  mode_toggle: true           # flicking the mode switch to TOGGLE
+  shutter_long_press: true    # holding the shutter for long_press_s
 
 # FR-46: used only if the MCP3008 volume dial can't be read at startup
 volume_buttons:
@@ -43,6 +76,8 @@ volume_buttons:
   down: 24
 
 # Sim mode keys (PRD 6.4)
+# Which keyboard keys stand in for each control when running `slr sim` on a laptop.
+# Each event can have several keys. Keys that YAML might misread (+ - = _) are quoted.
 keyboard:
   next_item: [right, n]
   prev_item: [left, p]

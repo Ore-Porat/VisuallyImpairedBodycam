@@ -1,5 +1,22 @@
 # Laptop server configuration (PRD section 4, 8). Paths are relative to the repo root.
+#
+# What this file is for
+#   The laptop does the heavy lifting: it receives camera frames from the device, runs the
+#   object detector, decides what to say, turns sentences into speech, and serves the
+#   shopping list editor. This file holds every tunable number for that side.
+#
+# Who reads it
+#   `slr server` and `slr sim` (slr/server/main.py) at startup, via slr/common/config.py,
+#   which checks every key and rejects typos. "PRD section 4" etc. refer to the product
+#   spec, PRD.pdf; FR-xx / TR-xx are its requirement numbers.
+#
+# How to edit safely
+#   Keep the indentation (two spaces per level). Times are in seconds unless the name ends
+#   in _ms (milliseconds). Positions and sizes under `guidance` are fractions of the camera
+#   frame (0.0 = left/top edge, 1.0 = right/bottom edge), so they work at any resolution.
+#   Restart the server after editing.
 
+# Network ports the server listens on. 0.0.0.0 means "all network interfaces".
 network:
   host: 0.0.0.0
   ws_port: 8765          # control channel: WebSocket over TCP (PRD 7.2)
@@ -7,91 +24,100 @@ network:
   http_port: 8767        # clip downloads + accessible shopping list editor (FR-4, FR-53)
   mdns: true             # advertise _slrslr._tcp so the device can find us (FR-51 P1)
 
+# The object-detection model (YOLO). "weights" is the trained model file.
 model:
   # Stage A GrocerEye model (test mAP50 0.930, see models/grocereye_a/eval_report.md).
   # Stock COCO for pipeline debugging: weights: yolo11n.pt, classes_file: config/classes_coco.yaml, imgsz: 640
   backend: ultralytics   # ultralytics | darknet_opencv | scripted
   weights: models/grocereye_a/best.pt
-  classes_file: config/classes.yaml
+  classes_file: config/classes.yaml   # id -> spoken name for the classes this model knows
   device: auto           # auto picks CUDA, then Apple MPS, then CPU
   imgsz: 320          # match the training size
   min_conf: 0.25         # detector floor; the guidance thresholds below decide what gets spoken
-  half: false
+  half: false            # 16-bit floating point on the GPU: faster, slightly less precise
   darknet_cfg: null      # darknet_opencv backend only
   darknet_weights: null
   scripted_file: null    # scripted backend only (tests / replay without a model)
 
+# The guidance engine: how detections become spoken directions (slr/server/guidance.py).
 guidance:
   # Confidence thresholds. conf_find is rewritten by training/pick_threshold.py (TR-14).
+  # Confidence is the detector's 0..1 certainty; a detection below the threshold is ignored.
   conf_find: 0.5
   conf_identify: 0.75   # Stage A held-out check: 0.6 -> 3/25 wrong, 0.75 -> 2/25 (see DECISIONS.md)
   conf_wrong_item: 0.7
 
   # Stable detection (PRD 8.2): target in >= stable_k of the last stable_n processed frames
+  # This filters out one-frame false alarms before "found" is spoken.
   stable_k: 3
   stable_n: 5
   iou_track_min: 0.3     # prefer the box that overlaps the one we were tracking
 
   # Find mode timings (FR-12, FR-19, FR-64)
-  not_found_prompt_s: 4.0
-  not_found_repeat_s: 8.0
-  lost_timeout_s: 1.5
-  direction_repeat_s: 1.5
+  not_found_prompt_s: 4.0    # say "Not seeing <item>. Turn slowly." after this long
+  not_found_repeat_s: 8.0    # ... and repeat it no more often than this
+  lost_timeout_s: 1.5        # say "Lost it." after this long without the target
+  direction_repeat_s: 1.5    # repeat an unchanged direction this often
 
   # Direction math (PRD 8.3), all in normalized 0..1 frame units
-  straight_tol: 0.08
-  slight_tol: 0.25
-  high_shelf_max: 0.33
-  low_shelf_min: 0.66
+  straight_tol: 0.08         # box center within this of the middle = "straight ahead"
+  slight_tol: 0.25           # ... within this = "slightly left / right"; beyond = "left / right"
+  high_shelf_max: 0.33       # box center above this = "high shelf"
+  low_shelf_min: 0.66        # box center below this = "low shelf"; in between = "eye level"
   vertical_offset: 0.0   # added to box center y; calibrate for camera tilt (see README)
-  direction_hysteresis: 0.02
-  flip_horizontal: false
+  direction_hysteresis: 0.02 # extra distance past a boundary before the spoken zone changes
+  flip_horizontal: false     # set true if "left" and "right" come out swapped
 
   # Within reach (FR-16)
-  reach_h: 0.35
-  reach_hold_s: 1.0
+  reach_h: 0.35              # box height (fraction of frame) that counts as "within reach"
+  reach_hold_s: 1.0          # ... held for this long
   reach_exit_ratio: 0.8  # leave WITHIN_REACH only when box height drops below reach_h * this
 
   # Identify mode (FR-31, FR-32)
-  identify_burst: 5
-  identify_min_votes: 3
-  identify_timeout_s: 1.5
-  identify_center_weight: 0.5
+  identify_burst: 5          # ask the device for this many frames
+  identify_min_votes: 3      # the same class must win in at least this many of them
+  identify_timeout_s: 1.5    # give an answer (or "Not sure") after this long regardless
+  identify_center_weight: 0.5   # how much being near the frame center counts vs confidence
 
   # Wrong item nearby (FR-20)
   wrong_item_enabled: true
-  wrong_item_center_tol: 0.15
-  wrong_item_repeat_s: 5.0
+  wrong_item_center_tol: 0.15   # the other item must be this close to center to be mentioned
+  wrong_item_repeat_s: 5.0      # repeat the warning no more often than this
 
   # Panned guidance tone (FR-21)
+  # A beep in the headphones that comes from the target's side and speeds up as you get close.
   tones_enabled: true
-  tone_freq_hz: 880
-  tone_duration_ms: 60
-  tone_interval_max_ms: 900
-  tone_interval_min_ms: 120
-  tone_min_change_ms: 60
-  tone_min_change_pan: 0.1
+  tone_freq_hz: 880          # pitch of the beep (A5)
+  tone_duration_ms: 60       # length of each beep
+  tone_interval_max_ms: 900  # time between beeps when the target is far / off to the side
+  tone_interval_min_ms: 120  # time between beeps when centered and close
+  tone_min_change_ms: 60     # only update the device when the interval changes by this much
+  tone_min_change_pan: 0.1   # ... or the stereo position changes by this much (-1..1 scale)
 
   # "Getting closer" (FR-22, P2)
   getting_closer_enabled: false
-  getting_closer_ratio: 1.3
+  getting_closer_ratio: 1.3      # say it when the box has grown by 30%
   getting_closer_repeat_s: 3.0
 
+  # Maximum frames per second the device is asked to stream.
   stream_max_fps: 10
 
+# Text-to-speech: how sentences from config/phrases.yaml become audio clips.
 tts:
   engines: [piper, espeak, pyttsx3]   # tried in order, first one that works wins
-  piper_voice: models/voices/en_US-lessac-medium.onnx
+  piper_voice: models/voices/en_US-lessac-medium.onnx   # downloaded by `slr clips download-voice`
   piper_voice_url: https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx
   length_scale: 1.0      # FR-66 speech rate: < 1 is faster, > 1 slower
-  sample_rate: 22050
+  sample_rate: 22050     # audio samples per second of the generated clips
 
+# Where the server keeps its files (relative to the repo folder).
 paths:
-  shopping_list: data/shopping_list.yaml
-  clips_dir: data/clips
-  logs_dir: data/logs
-  captured_dir: data/captured
+  shopping_list: data/shopping_list.yaml   # the live shopping list
+  clips_dir: data/clips                    # rendered speech clips (cache)
+  logs_dir: data/logs                      # one JSONL session log per run (FR-72)
+  captured_dir: data/captured              # frames saved with the "f" key for training
 
+# The on-screen window that shows the camera view with detection boxes (for developers).
 debug_view:
   enabled: true
   window_name: SLR SLR debug

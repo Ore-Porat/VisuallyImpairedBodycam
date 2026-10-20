@@ -1,19 +1,45 @@
 # Template: install_pi.sh fills in @REPO@ and @USER@ and installs it to /etc/systemd/system/.
+#
+# What this file is
+#   A "unit file" for systemd, the program that starts and supervises services on Linux
+#   (including Raspberry Pi OS). Installing this file makes the device software start by
+#   itself every time the Pi boots, and restart it if it ever crashes (FR-50 in the product
+#   spec, PRD.pdf). Useful commands once installed:
+#     sudo systemctl start slr-device      # start now
+#     sudo systemctl status slr-device     # is it running?
+#     journalctl -u slr-device -f          # watch its log output live
+#
+# The @REPO@ and @USER@ placeholders are replaced by install_pi.sh with the real folder
+# and user name, so do not edit this copy by hand; edit the installed copy or re-run the
+# installer.
+
+# [Unit]: general description and ordering relative to other services.
 [Unit]
 Description=SLR SLR wearable device
+# Start only after the network is up and the sound system is ready.
 After=network-online.target sound.target
+# Ask systemd to bring the network up for us (a wish, not a hard requirement).
 Wants=network-online.target
 
+# [Service]: what to run and how to treat the process.
 [Service]
+# "simple" = the command below IS the service; it runs in the foreground until stopped.
 Type=simple
+# Run as the normal user (not root). The user is in the gpio/spi/audio groups instead.
 User=@USER@
+# Start in the repo folder so relative paths in config/*.yaml resolve correctly.
 WorkingDirectory=@REPO@
+# The command: the "slr" tool from the project's virtual environment, in device mode.
 ExecStart=@REPO@/.venv/bin/slr device
+# If the program exits for any reason, start it again ...
 Restart=always
+# ... after waiting this many seconds.
 RestartSec=2
+# Make Python print log lines immediately instead of buffering them.
 Environment=PYTHONUNBUFFERED=1
 # keep the process small on the 512 MB Zero 2 W (NFR-13 target is < 150 MB)
 MemoryMax=200M
 
+# [Install]: when `systemctl enable` is run, hook the service into normal multi-user boot.
 [Install]
 WantedBy=multi-user.target

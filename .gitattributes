@@ -1,4 +1,9 @@
+# .gitattributes: tells git how to treat different kinds of files.
+# Line 1: every text file is stored with Unix line endings (LF) in the repository, whatever
+# the operating system of the person who edited it. This stops Windows (CRLF) and
+# Linux/macOS (LF) line endings from showing up as spurious changes.
 * text=auto eol=lf
+# These are binary files: git must never try to convert their line endings or show text diffs.
 *.wav binary
 *.pdf binary
 *.png binary

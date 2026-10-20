@@ -1,3 +1,8 @@
+# .gitignore: files and folders that git should NOT track. Each line is a pattern; a
+# trailing / means "a folder", * matches anything, ** matches any depth of sub-folders,
+# and a line starting with ! is an exception ("do track this after all").
+
+# Python build leftovers and the virtual environment (recreated with pip install)
 __pycache__/
 *.py[cod]
 *.egg-info/
@@ -25,6 +30,7 @@ runs/
 *.pt
 yolo*.pt
 
+# Operating-system and editor clutter
 .DS_Store
 Thumbs.db
 .idea/

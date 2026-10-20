@@ -1,45 +1,69 @@
 # Device (Raspberry Pi Zero 2 W) configuration. Pins live in controls.yaml.
+#
+# What this file is for
+#   Everything about how the wearable device behaves that is NOT a pin number: where to
+#   find the laptop, camera size, how frames are streamed, how audio is played, how the
+#   volume dial is read, how reconnects work, and where files are kept.
+#
+# Who reads it
+#   The device program (slr/device/main.py) at startup, via slr/common/config.py which
+#   checks every key and value. A misspelled key is an error, so you will know at once.
+#   FR-xx and NFR-xx are requirement numbers from the product spec, PRD.pdf.
+#
+# How to edit safely
+#   Keep the indentation (two spaces per level). Times are in seconds unless the name ends
+#   in _ms (milliseconds). "null" means "not set / use the default". After editing, restart
+#   the service:  sudo systemctl restart slr-device
 
+# A name for this device; it appears in the laptop's logs.
 device_id: slr-01
 
+# How to reach the laptop server.
 server:
   host: 10.42.0.1        # laptop hotspot address; "auto" = discover via mDNS (_slrslr._tcp)
-  ws_port: 8765
-  udp_port: 8766
-  http_port: 8767
-  discovery_timeout_s: 5.0
+  ws_port: 8765          # WebSocket port: button events go up, spoken cues come down
+  udp_port: 8766         # UDP port: camera frames go up, acks come down
+  http_port: 8767        # HTTP port: the device downloads audio clips from here
+  discovery_timeout_s: 5.0   # how long to wait for an mDNS answer when host is "auto"
 
+# The camera. On the Pi the Camera Module is read with picamera2; on a laptop a webcam is
+# read with OpenCV; "file" plays a video file or a folder of images (for tests / replay).
 camera:
   backend: picamera2     # picamera2 | opencv | file
   index: 0               # opencv backend: webcam index
   file: null             # file backend: video file or folder of images
-  width: 640
+  width: 640             # capture size in pixels
   height: 480
 
+# Sending frames to the laptop. One frame is "in flight" at a time: the next is sent only
+# after the laptop acknowledges the previous one (or ack_timeout_ms passes).
 streaming:
-  max_fps: 10
-  ack_timeout_ms: 300
-  max_datagram_bytes: 60000
-  jpeg_quality_start: 75
-  jpeg_quality_step: 10
-  jpeg_quality_min: 40
+  max_fps: 10                # never send more than this many frames per second
+  ack_timeout_ms: 300        # give up waiting for an ack after this long (milliseconds)
+  max_datagram_bytes: 60000  # a UDP packet must fit in this many bytes (header + JPEG)
+  jpeg_quality_start: 75     # JPEG quality 1..100; higher = sharper but bigger
+  jpeg_quality_step: 10      # lower quality by this much when a frame is too big
+  jpeg_quality_min: 40       # never go below this quality; skip the frame instead
   jpeg_recover_ratio: 0.6   # step quality back up once frames are under 60% of the limit
-  jpeg_recover_frames: 10
-  video_weak_s: 3.0         # FR-56
+  jpeg_recover_frames: 10    # ... and only after this many small frames in a row
+  video_weak_s: 3.0         # FR-56: say "video connection weak" after this many seconds of no acks
 
+# Headphone output.
 audio:
   backend: sounddevice   # sounddevice | aplay | null
   device: null           # ALSA / PortAudio device name or index; null = system default
-  sample_rate: 22050
-  blocksize: 512
+  sample_rate: 22050     # samples per second; matches the Piper voice clips
+  blocksize: 512         # audio buffer size in samples (smaller = lower delay, more CPU)
 
+# The volume knob. It is a potentiometer read through an MCP3008 analog-to-digital chip
+# over SPI. "buttons" uses the two fallback GPIO buttons; "keyboard" is for sim mode.
 volume:
   source: adc            # adc | buttons | keyboard
   adc:
     spi_bus: 0           # MCP3008 on SPI0
     spi_device: 0        # chip select: 0 = CE0 (GPIO 8), 1 = CE1 (GPIO 7)
     channel: 0           # CH0
-    max_speed_hz: 1000000
+    max_speed_hz: 1000000   # SPI clock speed (1 MHz)
   # Raw MCP3008 counts (0..1023) at dial min / middle / max (FR-44). Defaults are computed from
   # the measured 4.64k / 6.04k / 7.0k dial with a 5.6k fixed resistor, VREF = VDD = 3.3 V.
   # Re-run `slr device calibrate-volume` on the real hardware.
@@ -48,33 +72,37 @@ volume:
     raw_mid: 531
     raw_max: 569
     curve: piecewise     # piecewise | log
-  sample_hz: 20
-  median_n: 5
-  hysteresis_steps: 0.5
-  settle_ms: 300
+  sample_hz: 20          # how many times per second the dial is read
+  median_n: 5            # take the median of the last 5 readings to ignore one-off spikes
+  hysteresis_steps: 0.5  # extra travel (in volume steps) needed before the level changes
+  settle_ms: 300         # announce "Volume N" only after the knob has been still this long
   min_db: -30.0          # gain at level 1; level 0 is mute
   max_db: 0.0            # gain at level 10
-  initial_level: 6
+  initial_level: 6       # volume at boot, before the dial has been read
 
+# Reconnecting to the laptop after the connection drops.
 connection:
-  reconnect_initial_s: 0.5
+  reconnect_initial_s: 0.5   # first retry after half a second ...
   reconnect_max_s: 4.0   # keeps recovery well under the 10 s NFR-10 target
-  heartbeat_s: 2.0
-  http_timeout_s: 5.0
+  heartbeat_s: 2.0           # send a "still here" ping this often
+  http_timeout_s: 5.0        # give up on a clip download after this long
 
+# The command run when the shutdown combo is held (needs the sudoers rule from install_pi.sh).
 shutdown_command: [sudo, shutdown, -h, now]
 
+# Folders the device uses (relative to the repo folder).
 paths:
-  clip_cache: data/device_clips
-  system_clips: device_assets/system_clips
-  state_dir: data/device_state
+  clip_cache: data/device_clips          # audio clips downloaded from the laptop
+  system_clips: device_assets/system_clips   # built-in clips ("Starting up", "Volume 5" ...)
+  state_dir: data/device_state           # small saved state (e.g. a "first run done" marker)
 
 # Overrides applied by `slr sim` (and `slr device --sim`): webcam, keyboard, laptop speakers.
+# Only the keys listed here change; everything else above still applies.
 sim:
   server:
-    host: 127.0.0.1
+    host: 127.0.0.1      # the server runs on this same laptop
   camera:
-    backend: opencv
+    backend: opencv      # use the laptop webcam
   volume:
-    source: keyboard
-  shutdown_command: []
+    source: keyboard     # + and - keys instead of the dial
+  shutdown_command: []   # never power off the laptop

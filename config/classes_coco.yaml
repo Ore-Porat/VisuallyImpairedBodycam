@@ -1,5 +1,21 @@
 # Stock COCO classes for milestone M1 (pipeline bring-up before GrocerEye training).
 # class_id -> spoken name.
+#
+# What this file is for
+#   COCO is a well-known public image dataset of 80 everyday objects (people, cups, chairs,
+#   laptops ...). The stock YOLO model that ships with the ultralytics library is trained on
+#   it. This file lets the server use that model instead of our grocery model, which is
+#   handy for testing the camera / network / audio pipeline with objects lying around the
+#   room before the grocery model is trained.
+#
+# How to use it
+#   In config/server.yaml set:  weights: yolo11n.pt   classes_file: config/classes_coco.yaml
+#   imgsz: 640   (see the README, section "The model").
+#
+# Format
+#   internal_id: spoken name. The ids here must match the COCO class names exactly (some
+#   contain spaces). The spoken names on the right are free to change; a few are shortened
+#   so they sound natural ("sports ball" -> "ball", "cell phone" -> "phone").
 classes:
   person: person
   bicycle: bicycle

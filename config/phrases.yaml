@@ -5,7 +5,23 @@
 #
 # priority (FR-63): system > confirmation > guidance > info. A higher priority cue
 # interrupts a lower one. Guidance cues never queue: the newest one replaces any waiting one.
+#
+# What this file is for
+#   Everything the device ever says is written here, in plain English, so the wording can
+#   be changed without touching code. The laptop turns each sentence into speech once
+#   (with the Piper text-to-speech voice) and the device plays the resulting audio clip.
+#   FR-61 and FR-63 are requirement numbers from the product spec, PRD.pdf.
+#
+# Who reads it
+#   The laptop server (slr/server/clips.py). The guidance engine (slr/server/guidance.py)
+#   refers to phrases by the key on the left ("found", "within_reach" ...), so the KEYS
+#   must not be renamed; the TEXT on the right can be edited freely.
+#
+# How to edit safely
+#   Keep the braces around placeholders exactly as they are. Keep the quotes around text.
+#   Each phrase needs a priority: info (least important) < guidance < confirmation < system.
 
+# Words substituted for {h} (horizontal) and {v} (vertical) in the direction phrases.
 directions:
   left: Left
   slightly_left: Slightly left
@@ -16,13 +32,17 @@ directions:
   eye: Eye level
   low: Low shelf
 
+# Phrases spoken by the laptop server during normal use. key: {priority, text}.
 phrases:
+  # Mode switch
   ready:               {priority: confirmation, text: "Ready."}
   paused:              {priority: confirmation, text: "Paused."}
   standby_hint:        {priority: info, text: "Paused. Turn the switch on to continue."}
+  # Moving through the shopping list ({n} = item number, {total} = list length)
   list_empty:          {priority: confirmation, text: "Your shopping list is empty."}
   item_announce:       {priority: confirmation, text: "Item {n} of {total}: {item}."}
   item_announce_found: {priority: confirmation, text: "Item {n} of {total}: {item}. Already found."}
+  # Find mode: searching, guiding, reaching, checking off
   searching:           {priority: confirmation, text: "Searching for {item}."}
   search_stopped:      {priority: confirmation, text: "Search stopped."}
   not_seeing:          {priority: guidance, text: "Not seeing {item}. Turn slowly."}
@@ -35,15 +55,18 @@ phrases:
   lost:                {priority: confirmation, text: "Lost it."}
   wrong_item:          {priority: confirmation, text: "That's {other}, not {item}."}
   getting_closer:      {priority: guidance, text: "Getting closer."}
+  # Identify mode ("what am I holding?")
   identifying:         {priority: info, text: "Checking."}
   identified:          {priority: confirmation, text: "This is {item}."}
   identified_on_list:  {priority: confirmation, text: "This is {item}. It's on your list."}
   not_sure:            {priority: confirmation, text: "Not sure. Hold it closer to the camera."}
   not_sure_loss:       {priority: confirmation, text: "Not sure."}
+  # Progress report (rewind knob held) and help (advance lever held)
   status:              {priority: confirmation, text: "{found} of {total} items found. Current item: {item}."}
   status_done:         {priority: confirmation, text: "All {total} items found."}
   help:
     priority: confirmation
+    # ">-" means: the indented lines below are one long piece of text (line breaks become spaces).
     text: >-
       Shutter: press to search for the current item, press again to stop.
       When an item is within reach, press the shutter to check it off.
@@ -56,6 +79,8 @@ phrases:
 
 # Clips that ship with the device and play without the server (FR-52, FR-55, FR-56, FR-45).
 # Render with `slr clips build-system`; output goes to device_assets/system_clips/<key>.wav
+# These have no placeholders and no priority setting: the device program decides the
+# priority itself, because they report on the device (boot, connection, volume).
 system_phrases:
   starting_up: "Starting up."
   connected: "Connected."
@@ -64,6 +89,7 @@ system_phrases:
   camera_error: "Camera error."
   video_weak: "Video connection weak."
   shutting_down: "Shutting down."
+  # One clip per volume level 0..10, spoken when the dial stops moving.
   volume_0: "Volume 0."
   volume_1: "Volume 1."
   volume_2: "Volume 2."

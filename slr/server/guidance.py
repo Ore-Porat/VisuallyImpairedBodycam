@@ -11,11 +11,80 @@ from config/phrases.yaml), ``Tone`` (start/update/stop the panned guidance beep)
 (start/stop the device's camera stream).
 
 Say effects carry class ids, never spoken names. The phrase catalog turns them into words.
+
+=====================================================================================
+THE BIG PICTURE (read this first if you are new to the code)
+=====================================================================================
+
+This file is the "brain" of the product. It decides WHAT TO SAY to the shopper based on what
+the camera sees and which buttons were pressed. It does not talk to the camera, the network or
+the speaker itself; other files do that and simply call ``step`` here.
+
+It is written as a STATE MACHINE. Think of a board game token sitting on one of a few squares
+(the "modes"). Every time something happens (an "event") the token may hop to another square and
+some "effects" (speech, beeps, camera on/off) are produced along the way.
+
+The modes (squares):
+
+- STANDBY       The mode switch on the camera body is OFF. Nothing works except switching on.
+- IDLE          Switched on, waiting. The shopper can browse the list, press Enter to search,
+                or press Identify.
+- SEARCHING     Camera is streaming, looking for the current list item. Nothing found yet.
+- GUIDING       The item has been spotted. We say "left / right / eye level..." and beep.
+- WITHIN_REACH  The item is big and centered in the frame: it is at arm's length. Pressing
+                Enter now checks it off the list.
+- IDENTIFYING   A short burst of frames is being analysed to answer "what am I holding?".
+                Afterwards we go back to where we were.
+
+The events (things that happen):
+
+- Control(event, value)   A button/switch on the device: "enter", "next_item", "prev_item",
+                          "identify", "mode_on", "mode_off", "help", "status", "volume_set",
+                          "shutdown".
+- Frame(detections, ...)  The object detector has looked at one camera picture and this is the
+                          list of boxes it found (each box = class name + confidence + position).
+- Tick()                  Nothing happened, but time passed. Used to notice time-outs ("I lost
+                          the item", "I still don't see it").
+
+The effects (things we ask other code to do):
+
+- Say(key, params)        Speak the phrase named ``key`` from ``config/phrases.yaml``, filling
+                          in ``params`` (like the item name).
+- Tone(pan, interval_ms)  Play / update / stop the parking-sensor style beep. ``pan`` is -1
+                          (left ear) to +1 (right ear). ``interval_ms=None`` means stop.
+- Stream(on, purpose)     Switch the device camera stream on or off.
+
+Everything is IMMUTABLE: we never modify a ``State`` in place. Instead ``replace(state, ...)``
+returns a fresh copy with some fields changed. That is what makes the engine easy to test and
+reason about: old states are never corrupted by accident.
+
+WORDS YOU WILL SEE
+------------------
+- dataclass: a class that is just a bundle of named fields. ``@dataclass(frozen=True)`` makes it
+  read-only (you cannot change a field after creation; use ``replace`` to get a changed copy).
+- Enum: a fixed set of named constants (``Mode.IDLE`` etc.).
+- type hints like ``x: float`` or ``-> State``: notes about what type a value is. Python does
+  not enforce them; they are documentation for people and tools.
+- ``str | None``: "a string, or nothing".
+- tuple: an immutable list, written ``(a, b, c)``. ``tuple[Detection, ...]`` = "a tuple of any
+  number of Detections".
+- Detection: one box found by the detector (see ``slr/common/types.py``). ``.cls`` is the class
+  name (e.g. "pasta"), ``.conf`` is the detector's confidence 0..1, ``.cx/.cy`` the box center,
+  ``.h`` the box height. All positions are fractions of the frame (0 = left/top, 1 = right/bottom).
+- confidence: how sure the detector is, from 0 (guess) to 1 (certain).
+- IoU (intersection over union): how much two boxes overlap, 0 = none, 1 = identical.
+- hysteresis: a deliberate "stickiness" so a value hovering around a boundary does not flip
+  back and forth. We only change our mind once it is clearly past the line.
+- cfg / GuidanceConfig: all the tunable numbers from the ``guidance:`` section of
+  ``config/server.yaml`` (thresholds, time-outs, tone settings).
+- FR-xx: requirement numbers from the product spec, ``PRD.pdf``.
 """
 
 from __future__ import annotations
 
+# Counter counts how many times each value appears (used for the identify vote).
 from collections import Counter
+# dataclass/field define simple record classes; replace makes a modified copy of one.
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Union
@@ -25,6 +94,12 @@ from slr.common.types import FOUND, PENDING, Detection, ListItem
 
 
 class Mode(str, Enum):
+    """The six "squares" of the state machine. See the overview at the top of the file.
+
+    Inheriting from ``str`` too means ``Mode.IDLE == "idle"`` is True, which makes logging and
+    JSON output simple.
+    """
+
     STANDBY = "standby"
     IDLE = "idle"
     SEARCHING = "searching"
@@ -33,26 +108,47 @@ class Mode(str, Enum):
     IDENTIFYING = "identifying"
 
 
+# Modes in which a "find" search is running (the camera streams and we look for the target).
 FIND_MODES = (Mode.SEARCHING, Mode.GUIDING, Mode.WITHIN_REACH)
+# Modes in which we have already seen the target and are following it frame by frame.
 TRACKING_MODES = (Mode.GUIDING, Mode.WITHIN_REACH)
 
+# Horizontal direction words. Key = (how far off center: 0 none / 1 a bit / 2 a lot,
+# which side: -1 left / +1 right). Value = the direction key used in phrases.yaml.
 H_DIRS = {(0, -1): "straight", (0, 1): "straight", (1, -1): "slightly_left",
           (1, 1): "slightly_right", (2, -1): "left", (2, 1): "right"}
+# The reverse: direction word -> how far off center (needed for hysteresis).
 H_LEVEL = {"straight": 0, "slightly_left": 1, "slightly_right": 1, "left": 2, "right": 2}
+# Vertical zones from top of frame to bottom: high shelf, eye level, low shelf.
 V_ZONES = ("high", "eye", "low")
 
 
 # --------------------------------------------------------------------------- events
+# An "event" is the input to one step of the state machine.
 
 
 @dataclass(frozen=True)
 class Control:
+    """A button, switch or dial event from the device.
+
+    event: the name, e.g. "enter", "next_item", "identify", "mode_on", "volume_set".
+    value: optional number that goes with it (only used for "volume_set").
+    """
+
     event: str
     value: int | None = None
 
 
 @dataclass(frozen=True)
 class Frame:
+    """The detector's results for one camera picture.
+
+    detections: every box the detector found in this picture.
+    purpose:    "find" (normal search stream) or "identify" (a burst for Identify mode).
+    burst_id:   which identify burst this frame belongs to; 0 for find frames. Lets us ignore
+                late frames from an older burst.
+    """
+
     detections: tuple[Detection, ...] = ()
     purpose: str = "find"
     burst_id: int = 0
@@ -60,25 +156,44 @@ class Frame:
 
 @dataclass(frozen=True)
 class Tick:
+    """Nothing happened except that time passed. The server sends one about 10 times a second."""
+
     pass
 
 
+# "An Event is a Control OR a Frame OR a Tick."
 Event = Union[Control, Frame, Tick]
 
 
 # --------------------------------------------------------------------------- effects
+# An "effect" is an instruction the engine hands back: it never performs it itself.
 
 
 @dataclass(frozen=True)
 class Say:
+    """Speak a phrase.
+
+    key:       the phrase name in ``config/phrases.yaml`` (e.g. "found", "direction").
+    params:    values to fill into the phrase text, e.g. ``{"item": "pasta"}``. Item values are
+               class ids; the phrase catalog turns them into spoken names.
+    interrupt: True = cut off whatever is being spoken right now and say this instead.
+    """
+
     key: str
+    # ``field(default_factory=dict)`` gives each Say its own fresh empty dict as the default.
     params: dict = field(default_factory=dict)
     interrupt: bool = False
 
 
 @dataclass(frozen=True)
 class Tone:
-    """Guidance beep. interval_ms None means stop."""
+    """Guidance beep. interval_ms None means stop.
+
+    pan:         where the beep sits in the headphones: -1 = fully left, 0 = center, +1 = right.
+    interval_ms: time between beeps. Shorter = closer / more centered. None = stop beeping.
+    freq_hz:     pitch of the beep.
+    duration_ms: length of each individual beep.
+    """
 
     pan: float = 0.0
     interval_ms: int | None = None
@@ -88,6 +203,14 @@ class Tone:
 
 @dataclass(frozen=True)
 class Stream:
+    """Turn the device's camera stream on or off.
+
+    on:       True to start streaming frames to the laptop, False to stop.
+    purpose:  "find" or "identify" (the device tags every frame with it).
+    burst:    for identify: send exactly this many frames then stop. None = keep streaming.
+    burst_id: number that identifies this particular burst.
+    """
+
     on: bool
     purpose: str = "find"
     burst: int | None = None
@@ -98,15 +221,34 @@ Effect = Union[Say, Tone, Stream]
 
 
 def say(key: str, interrupt: bool = False, **params) -> Say:
+    """Shorthand for building a ``Say``: ``say("found", interrupt=True, item="pasta")``.
+
+    ``**params`` collects any extra keyword arguments into a dict.
+    """
     return Say(key, params, interrupt)
 
 
 # --------------------------------------------------------------------------- state
+# The "state" is everything the engine needs to remember between steps.
 
 
 @dataclass(frozen=True)
 class Tracking:
-    """Everything about the current find-mode target. Reset on every new search / loss."""
+    """Everything about the current find-mode target. Reset on every new search / loss.
+
+    history:         the last few frames' sighting of the target (a Detection or None if the
+                     target was not in that frame). Used to decide "stable" sightings.
+    last_seen_at:    time the target was last seen (for the lost time-out).
+    last_box:        the most recent box of the target (helps follow the same box next frame).
+    h_dir / v_zone:  the current horizontal direction word and vertical zone.
+    said_h / said_v: the direction / zone we last SPOKE (so we only repeat on change or timer).
+    said_at:         when we last spoke a direction.
+    reach_since:     when the box first looked "within reach" (it must hold for a moment).
+    tone:            the (pan, interval) of the beep currently playing, so we only send updates
+                     when it changes noticeably.
+    closer_ref_h:    reference box height for the "getting closer" cue.
+    closer_said_at:  when we last said "getting closer".
+    """
 
     history: tuple[Detection | None, ...] = ()
     last_seen_at: float | None = None
@@ -124,6 +266,14 @@ class Tracking:
 
 @dataclass(frozen=True)
 class Identify:
+    """Bookkeeping for one Identify burst ("what am I holding?").
+
+    burst_id:   which burst we are waiting for (frames from other bursts are ignored).
+    started_at: when the burst began (for the time-out).
+    resume:     the mode to go back to afterwards (e.g. continue a search that was running).
+    picks:      per frame, the best candidate (class, confidence) or None if nothing was seen.
+    """
+
     burst_id: int
     started_at: float
     resume: Mode
@@ -132,6 +282,23 @@ class Identify:
 
 @dataclass(frozen=True)
 class State:
+    """The complete memory of the engine. One of these exists at a time; ``step`` returns a new one.
+
+    mode:               which square the token is on (see ``Mode``).
+    items:              the shopping list (name + pending/found).
+    index:              which list item is current (0 = first).
+    target:             class id being searched for, or None.
+    search_ref:         when the search started / target last seen while SEARCHING, for the
+                        "I don't see X" reminder.
+    not_found_said_at:  when we last said "I don't see X".
+    track:              see ``Tracking``.
+    other_history:      last few frames' "some other list item is centered" sightings (FR-20).
+    wrong_item_said_at: when we last said "that's Y, not X".
+    identify:           see ``Identify``; None when not identifying.
+    burst_counter:      increments per identify burst to make unique burst ids.
+    volume:             last volume level reported by the device (just recorded).
+    """
+
     mode: Mode = Mode.STANDBY
     items: tuple[ListItem, ...] = ()
     index: int = 0
@@ -145,17 +312,22 @@ class State:
     burst_counter: int = 0
     volume: int | None = None
 
+    # ``@property`` lets you write ``state.current_item`` (no parentheses) and run this code.
     @property
     def current_item(self) -> ListItem | None:
+        """The list item at ``index``, or None if the list is empty / index is out of range."""
         return self.items[self.index] if 0 <= self.index < len(self.items) else None
 
     @property
     def streaming(self) -> bool:
+        """True in every mode where the device camera should be sending frames."""
         return self.mode in FIND_MODES or self.mode == Mode.IDENTIFYING
 
 
 def initial_state(items: tuple[ListItem, ...] | list[ListItem] = (), index: int = 0) -> State:
+    """Build the starting state (STANDBY) from a shopping list and current item index."""
     items = tuple(items)
+    # If the saved index is out of range, fall back to the first item.
     return State(items=items, index=index if 0 <= index < len(items) else 0)
 
 
@@ -166,34 +338,56 @@ def with_items(state: State, items: tuple[ListItem, ...] | list[ListItem], index
     if not items:
         idx = 0
     else:
+        # Clamp the index into 0 .. len-1.
         idx = min(max(idx, 0), len(items) - 1)
     return replace(state, items=items, index=idx)
 
 
 # --------------------------------------------------------------------------- pure helpers
+# Small math helpers used by the transitions below. None of them change any state.
 
 
 def _zone_with_hysteresis(zone_fn, value: float, prev: int | None, hyst: float) -> int:
-    """Only leave the previous zone once the value is ``hyst`` past the boundary."""
+    """Only leave the previous zone once the value is ``hyst`` past the boundary.
+
+    zone_fn: a function that maps a number to a zone index (0, 1, 2...).
+    value:   the number to classify.
+    prev:    the zone we were in last time (None = first time, no stickiness).
+    hyst:    how far past the boundary the value must be before we switch zones.
+    """
     raw = zone_fn(value)
     if prev is None or raw == prev:
         return raw
     if raw > prev:
+        # Moving up a zone: pretend the value is ``hyst`` smaller; only switch if it still
+        # lands above the previous zone.
         return max(prev, zone_fn(value - hyst))
+    # Moving down a zone: same idea in the other direction.
     return min(prev, zone_fn(value + hyst))
 
 
 def adjusted_center(box: Detection, cfg: GuidanceConfig) -> tuple[float, float]:
+    """The box center after applying the camera corrections from config.
+
+    flip_horizontal swaps left/right for a mirrored camera; vertical_offset compensates for the
+    camera tilting up or down on the chest.
+    """
     cx = 1.0 - box.cx if cfg.flip_horizontal else box.cx
     return cx, box.cy + cfg.vertical_offset
 
 
 def classify_horizontal(cx: float, prev: str | None, cfg: GuidanceConfig) -> str:
-    """Box center x (0..1) -> left / slightly_left / straight / slightly_right / right."""
+    """Box center x (0..1) -> left / slightly_left / straight / slightly_right / right.
 
+    cx:   horizontal center of the box, 0 = left edge of the frame, 1 = right edge.
+    prev: the direction word we used last time (for hysteresis), or None.
+    """
+
+    # Inner helper: how far off center (as a 0..1 fraction) maps to level 0 / 1 / 2.
     def zone(a: float) -> int:
         return 0 if a < cfg.straight_tol else (1 if a < cfg.slight_tol else 2)
 
+    # Distance from the middle: negative = left of center, positive = right.
     offset = cx - 0.5
     level = _zone_with_hysteresis(zone, abs(offset), H_LEVEL.get(prev) if prev else None,
                                   cfg.direction_hysteresis)
@@ -203,6 +397,7 @@ def classify_horizontal(cx: float, prev: str | None, cfg: GuidanceConfig) -> str
 def classify_vertical(cy: float, prev: str | None, cfg: GuidanceConfig) -> str:
     """Box center y (0..1, after vertical_offset) -> high / eye / low."""
 
+    # 0 = high shelf (top of frame), 1 = eye level, 2 = low shelf (bottom of frame).
     def zone(y: float) -> int:
         return 0 if y < cfg.high_shelf_max else (2 if y > cfg.low_shelf_min else 1)
 
@@ -212,26 +407,45 @@ def classify_vertical(cy: float, prev: str | None, cfg: GuidanceConfig) -> str:
 
 def select_target(dets: tuple[Detection, ...], target: str | None, last_box: Detection | None,
                   cfg: GuidanceConfig) -> Detection | None:
-    """Pick the target box in this frame: overlap with the tracked box first, else most confident."""
+    """Pick the target box in this frame: overlap with the tracked box first, else most confident.
+
+    dets:     all boxes in the frame.
+    target:   the class id we are looking for.
+    last_box: where the target was last frame (None if not yet seen).
+    Returns the chosen box, or None if the target is not confidently in this frame.
+    """
+    # Keep only boxes of the right class with enough confidence.
     cands = [d for d in dets if d.cls == target and d.conf >= cfg.conf_find]
     if not cands:
         return None
     if last_box is not None:
+        # Prefer the box that overlaps most with where we saw it last (follow the same item,
+        # even if a second one of the same kind appears on the shelf).
+        # ``key=lambda d: ...`` tells max() what number to compare for each candidate.
         best = max(cands, key=lambda d: d.iou(last_box))
         if best.iou(last_box) >= cfg.iou_track_min:
             return best
+    # Otherwise take the one the detector is most sure about.
     return max(cands, key=lambda d: d.conf)
 
 
 def is_stable(history: tuple[Detection | None, ...], cfg: GuidanceConfig) -> bool:
+    """True if the target was seen in at least ``stable_k`` of the last few frames.
+
+    This avoids announcing "found" on a single flickering detection.
+    """
     return sum(1 for d in history if d is not None) >= cfg.stable_k
 
 
 def pick_identify_candidate(dets: tuple[Detection, ...], cfg: GuidanceConfig) -> tuple[str, float] | None:
-    """Most confident detection nearest the center (FR-31)."""
+    """Most confident detection nearest the center (FR-31).
+
+    Returns (class id, confidence) of the best box, or None if the frame had no boxes.
+    """
     if not dets:
         return None
 
+    # Score = confidence minus a penalty for being far from the center of the picture.
     def score(d: Detection) -> float:
         dist = ((d.cx - 0.5) ** 2 + (d.cy - 0.5) ** 2) ** 0.5
         return d.conf - cfg.identify_center_weight * dist
@@ -241,23 +455,33 @@ def pick_identify_candidate(dets: tuple[Detection, ...], cfg: GuidanceConfig) ->
 
 
 def tone_for(box: Detection, mode: Mode, cfg: GuidanceConfig) -> tuple[float, int]:
-    """Parking-sensor style tone (FR-21): pan toward the target, faster when centered and close."""
+    """Parking-sensor style tone (FR-21): pan toward the target, faster when centered and close.
+
+    Returns (pan, interval_ms). pan: -1 left .. +1 right. interval: ms between beeps.
+    """
     cx, _ = adjusted_center(box, cfg)
+    # Map center position 0..1 to pan -1..+1 and clamp.
     pan = max(-1.0, min(1.0, (cx - 0.5) * 2))
     if mode == Mode.WITHIN_REACH:
+        # At arm's length: fastest possible beeping.
         return round(pan, 2), cfg.tone_interval_min_ms
+    # "closeness" blends two things, each 0..1: how centered the box is and how big it is
+    # (a bigger box means the item is nearer the camera).
     centered = 1.0 - min(1.0, abs(cx - 0.5) / 0.5)
     size = min(1.0, box.h / cfg.reach_h) if cfg.reach_h > 0 else 1.0
     closeness = 0.5 * centered + 0.5 * size
+    # Interpolate between the slowest and fastest beep intervals.
     span = cfg.tone_interval_max_ms - cfg.tone_interval_min_ms
     return round(pan, 2), int(round(cfg.tone_interval_max_ms - span * closeness))
 
 
 def vote_identify(picks: tuple[tuple[str, float] | None, ...], cfg: GuidanceConfig) -> str | None:
     """Majority vote over the burst (FR-32). Returns the winner or None if not confident."""
+    # Count one vote per frame for its candidate class, ignoring weak candidates.
     votes = Counter(p[0] for p in picks if p is not None and p[1] >= cfg.conf_identify)
     if not votes:
         return None
+    # most_common() gives [(class, count), ...] sorted by count, highest first.
     ranked = votes.most_common()
     winner, count = ranked[0]
     if count < cfg.identify_min_votes:
@@ -268,8 +492,10 @@ def vote_identify(picks: tuple[tuple[str, float] | None, ...], cfg: GuidanceConf
 
 
 def next_pending_index(items: tuple[ListItem, ...], start: int) -> int | None:
+    """Index of the next item after ``start`` that is still pending (wrapping around), or None."""
     n = len(items)
     for k in range(1, n + 1):
+        # ``%`` wraps around to the top of the list after the last item.
         i = (start + k) % n
         if items[i].status == PENDING:
             return i
@@ -277,20 +503,35 @@ def next_pending_index(items: tuple[ListItem, ...], start: int) -> int | None:
 
 
 # --------------------------------------------------------------------------- transitions
+# The functions below move the state machine. Each takes a State and returns
+# (new State, list of Effects). ``step`` is the only public entry point.
 
 
 def step(state: State, event: Event, now: float, cfg: GuidanceConfig) -> tuple[State, list[Effect]]:
+    """Advance the engine by one event. THE entry point; everything else is called from here.
+
+    state: the current state.
+    event: a Control, Frame or Tick.
+    now:   current time in seconds (any clock, as long as it is consistent).
+    cfg:   guidance settings.
+    Returns (new state, effects to perform).
+
+    Flow: 1) handle the event itself, 2) run the timers (time-outs that apply regardless of
+    which event arrived), 3) return the combined list of effects.
+    """
     if isinstance(event, Control):
         state, fx = _on_control(state, event, now, cfg)
     elif isinstance(event, Frame):
         state, fx = _on_frame(state, event, now, cfg)
     else:
+        # A Tick: no direct effects, only the timers below.
         fx = []
     state, tfx = _timers(state, now, cfg)
     return state, fx + tfx
 
 
 def _stop_tone(s: State) -> tuple[State, list[Effect]]:
+    """If a beep is playing, emit a stop-tone effect and forget it."""
     if s.track.tone is None:
         return s, []
     return replace(s, track=replace(s.track, tone=None)), [Tone(interval_ms=None)]
@@ -307,18 +548,22 @@ def _leave_find(s: State) -> tuple[State, list[Effect]]:
 
 
 def _start_search(s: State, target: str, now: float, cfg: GuidanceConfig) -> State:
+    """Enter SEARCHING for ``target`` with fresh tracking data."""
     return replace(s, mode=Mode.SEARCHING, target=target, track=Tracking(), other_history=(),
                    search_ref=now, not_found_said_at=None, identify=None)
 
 
 def _announce_item(s: State) -> Say:
+    """The "Item 2 of 5: pasta" phrase for the current list item (different if already found)."""
     item = s.items[s.index]
     key = "item_announce_found" if item.status == FOUND else "item_announce"
     return say(key, interrupt=True, n=s.index + 1, total=len(s.items), item=item.name)
 
 
 def _on_control(s: State, ev: Control, now: float, cfg: GuidanceConfig) -> tuple[State, list[Effect]]:
+    """Handle a button / switch event. Checked top to bottom; the first matching rule wins."""
     e = ev.event
+    # --- events that work in every mode -------------------------------------------------
     if e == "volume_set":
         # Volume is applied and announced on the device; the server only records it (FR-45).
         return replace(s, volume=ev.value), []
@@ -327,6 +572,7 @@ def _on_control(s: State, ev: Control, now: float, cfg: GuidanceConfig) -> tuple
         s, fx = _leave_find(s)
         return replace(s, mode=Mode.STANDBY), fx
     if e == "mode_off":
+        # Mode switch flipped to OFF: stop everything and say "paused".
         s, fx = _leave_find(s)
         return replace(s, mode=Mode.STANDBY), fx + [say("paused", interrupt=True)]
     if e == "mode_on":
@@ -334,6 +580,7 @@ def _on_control(s: State, ev: Control, now: float, cfg: GuidanceConfig) -> tuple
             return replace(s, mode=Mode.IDLE), [say("ready", interrupt=True)]
         return s, []  # already active (e.g. TOGGLE springing back to ON)
 
+    # --- everything below needs the device to be switched on ----------------------------
     if s.mode == Mode.STANDBY:
         return s, [say("standby_hint")]  # only the mode switch and shutdown work in standby
     if s.mode == Mode.IDENTIFYING:
@@ -342,10 +589,12 @@ def _on_control(s: State, ev: Control, now: float, cfg: GuidanceConfig) -> tuple
     if e == "identify":
         return _start_identify(s, now, cfg)
     if e in ("next_item", "prev_item"):
+        # Browse the list. Cancels any running search first.
         if not s.items:
             return s, [say("list_empty", interrupt=True)]
         s, fx = _leave_find(s)
         step_by = 1 if e == "next_item" else -1
+        # ``%`` wraps around: after the last item comes the first one again.
         s = replace(s, mode=Mode.IDLE, index=(s.index + step_by) % len(s.items))
         return s, fx + [_announce_item(s)]
     if e == "enter":
@@ -354,10 +603,12 @@ def _on_control(s: State, ev: Control, now: float, cfg: GuidanceConfig) -> tuple
         return s, [say("help", interrupt=True)]
     if e == "status":
         return s, [_status(s)]
+    # Unknown event name: ignore it.
     return s, []
 
 
 def _status(s: State) -> Say:
+    """The spoken progress report: "3 of 5 found, current item pasta"."""
     if not s.items:
         return say("list_empty", interrupt=True)
     found = sum(1 for it in s.items if it.status == FOUND)
@@ -367,6 +618,12 @@ def _status(s: State) -> Say:
 
 
 def _on_enter(s: State, now: float, cfg: GuidanceConfig) -> tuple[State, list[Effect]]:
+    """The Enter button (shutter release) means different things depending on the mode:
+
+    IDLE                 -> start searching for the current item.
+    SEARCHING / GUIDING  -> cancel the search.
+    WITHIN_REACH         -> check the item off and move to the next pending one.
+    """
     if s.mode == Mode.IDLE:
         if not s.items:
             return s, [say("list_empty", interrupt=True)]
@@ -379,10 +636,13 @@ def _on_enter(s: State, now: float, cfg: GuidanceConfig) -> tuple[State, list[Ef
         return replace(s, mode=Mode.IDLE), fx + [say("search_stopped", interrupt=True)]
     if s.mode == Mode.WITHIN_REACH:
         target = s.target
+        # Build a new items tuple with the current item marked FOUND (all others unchanged).
+        # ``enumerate`` gives (position, item) pairs.
         items = tuple(replace(it, status=FOUND) if i == s.index else it for i, it in enumerate(s.items))
         s, fx = _leave_find(s)
         nxt = next_pending_index(items, s.index)
         if nxt is None:
+            # Nothing left to find: stay on this item and celebrate.
             s = replace(s, mode=Mode.IDLE, items=items)
             return s, fx + [say("checked_off_done", interrupt=True, item=target)]
         s = replace(s, mode=Mode.IDLE, items=items, index=nxt)
@@ -391,8 +651,10 @@ def _on_enter(s: State, now: float, cfg: GuidanceConfig) -> tuple[State, list[Ef
 
 
 def _start_identify(s: State, now: float, cfg: GuidanceConfig) -> tuple[State, list[Effect]]:
+    """Begin an Identify burst: remember where to return, ask the device for N frames."""
     resume = s.mode
     s, fx = _stop_tone(s)
+    # Burst ids cycle through 1..65535 so they fit in the 16-bit field of the frame header.
     burst_id = (s.burst_counter % 0xFFFF) + 1
     s = replace(s, mode=Mode.IDENTIFYING, burst_counter=burst_id,
                 identify=Identify(burst_id=burst_id, started_at=now, resume=resume))
@@ -401,7 +663,9 @@ def _start_identify(s: State, now: float, cfg: GuidanceConfig) -> tuple[State, l
 
 
 def _finish_identify(s: State, now: float, cfg: GuidanceConfig) -> tuple[State, list[Effect]]:
+    """Count the votes, announce the result, and go back to the mode we came from."""
     ident = s.identify
+    # ``assert`` crashes loudly if this is ever None; it documents an assumption.
     assert ident is not None
     if len(ident.picks) < cfg.identify_min_votes:
         cue = say("not_sure_loss", interrupt=True)  # too few frames arrived: never guess
@@ -409,6 +673,7 @@ def _finish_identify(s: State, now: float, cfg: GuidanceConfig) -> tuple[State, 
         winner = vote_identify(ident.picks, cfg)
         if winner is None:
             cue = say("not_sure", interrupt=True)
+        # ``any(...)`` is True if at least one list item matches the winner and is still pending.
         elif any(it.name == winner and it.status == PENDING for it in s.items):
             cue = say("identified_on_list", interrupt=True, item=winner)
         else:
@@ -423,20 +688,32 @@ def _finish_identify(s: State, now: float, cfg: GuidanceConfig) -> tuple[State, 
 
 
 def _on_frame(s: State, f: Frame, now: float, cfg: GuidanceConfig) -> tuple[State, list[Effect]]:
+    """Handle the detector's output for one camera frame.
+
+    Two very different jobs depending on mode:
+    - IDENTIFYING: collect one candidate per frame; when the burst is complete, vote.
+    - SEARCHING / GUIDING / WITHIN_REACH: find the target box, update tracking, then either
+      announce "found" (first stable sighting) or give direction cues.
+    """
     if s.mode == Mode.IDENTIFYING:
         ident = s.identify
+        # Ignore frames that are not part of the burst we are waiting for.
         if ident is None or f.purpose != "identify" or f.burst_id != ident.burst_id:
             return s, []
+        # Append this frame's best candidate to the picks tuple.
         ident = replace(ident, picks=ident.picks + (pick_identify_candidate(f.detections, cfg),))
         s = replace(s, identify=ident)
         if len(ident.picks) >= cfg.identify_burst:
             return _finish_identify(s, now, cfg)
         return s, []
 
+    # Frames only matter while a find search is running.
     if s.mode not in FIND_MODES or f.purpose != "find" or s.target is None:
         return s, []
 
+    # Which box (if any) is our target in this frame?
     det = select_target(f.detections, s.target, s.track.last_box, cfg)
+    # Slide the sighting history window: append this result, keep only the last stable_n.
     track = replace(s.track, history=(s.track.history + (det,))[-cfg.stable_n:])
     if det is not None:
         track = replace(track, last_seen_at=now, last_box=det)
@@ -446,12 +723,16 @@ def _on_frame(s: State, f: Frame, now: float, cfg: GuidanceConfig) -> tuple[Stat
         if det is not None:
             s = replace(s, search_ref=now)  # resets the "not seeing" timer (FR-12)
         if is_stable(track.history, cfg) and track.last_box is not None:
+            # Seen often enough: announce "found" and give the first direction right away.
             s = replace(s, mode=Mode.GUIDING, other_history=())
             fx: list[Effect] = [say("found", interrupt=True, item=s.target)]
             s, gfx = _guide(s, track.last_box, now, cfg, acquired=True)
             return s, fx + gfx
+        # Not found yet: maybe a different list item is right in front of the camera.
         return _check_wrong_item(s, f, det, now, cfg)
 
+    # GUIDING or WITHIN_REACH: nothing to say if the target is not in this frame
+    # (the lost time-out in _timers handles a long absence).
     if det is None:
         return s, []
     return _guide(s, det, now, cfg, acquired=False)
@@ -464,16 +745,19 @@ def _check_wrong_item(s: State, f: Frame, det: Detection | None, now: float,
         return s, []
     other: str | None = None
     if det is None:
+        # Boxes of some other class, confident enough, and near the center of the frame.
         cands = [d for d in f.detections
                  if d.cls != s.target and d.conf >= cfg.conf_wrong_item
                  and abs(adjusted_center(d, cfg)[0] - 0.5) < cfg.wrong_item_center_tol
                  and abs(d.cy - 0.5) < cfg.wrong_item_center_tol * 2]
         if cands:
             other = max(cands, key=lambda d: d.conf).cls
+    # Same sliding-window idea as the target history: require a few consistent frames.
     hist = (s.other_history + (other,))[-cfg.stable_n:]
     s = replace(s, other_history=hist)
     if other is None or hist.count(other) < cfg.stable_k:
         return s, []
+    # Don't nag: repeat at most every wrong_item_repeat_s seconds.
     if s.wrong_item_said_at is not None and now - s.wrong_item_said_at < cfg.wrong_item_repeat_s:
         return s, []
     return replace(s, wrong_item_said_at=now), [say("wrong_item", other=other, item=s.target)]
@@ -481,7 +765,11 @@ def _check_wrong_item(s: State, f: Frame, det: Detection | None, now: float,
 
 def _guide(s: State, box: Detection, now: float, cfg: GuidanceConfig,
            acquired: bool) -> tuple[State, list[Effect]]:
-    """Direction, within-reach, getting-closer and tone cues for one sighting of the target."""
+    """Direction, within-reach, getting-closer and tone cues for one sighting of the target.
+
+    box:      where the target is in this frame.
+    acquired: True on the very first sighting (we always speak the full direction then).
+    """
     t = s.track
     cx, cy = adjusted_center(box, cfg)
     h_dir = classify_horizontal(cx, t.h_dir, cfg)
@@ -490,6 +778,7 @@ def _guide(s: State, box: Detection, now: float, cfg: GuidanceConfig,
     fx: list[Effect] = []
 
     if s.mode == Mode.WITHIN_REACH:
+        # Still straight ahead and still big enough? Then just keep the beep updated.
         if h_dir == "straight" and box.h >= cfg.reach_h * cfg.reach_exit_ratio:
             s = replace(s, track=t)
             return _update_tone(s, box, cfg)
@@ -497,14 +786,21 @@ def _guide(s: State, box: Detection, now: float, cfg: GuidanceConfig,
         s = replace(s, mode=Mode.GUIDING)
         t = replace(t, reach_since=None, said_h=None, said_at=None)
     else:
+        # "Within reach" = centered AND the box is tall enough (close to the camera).
         reach = h_dir == "straight" and box.h >= cfg.reach_h
+        # Remember when the reach condition first became true; clear it when it stops.
         reach_since = (t.reach_since if t.reach_since is not None else now) if reach else None
         t = replace(t, reach_since=reach_since)
+        # It must hold for reach_hold_s seconds to avoid a false "within reach" on a blip.
         if reach_since is not None and now - reach_since >= cfg.reach_hold_s:
             s = replace(s, mode=Mode.WITHIN_REACH, track=t)
             s, tfx = _update_tone(s, box, cfg)
             return s, [say("within_reach", interrupt=True, item=s.target)] + tfx
 
+    # Decide whether to speak a direction now:
+    # - speak_v: the vertical zone changed (or first sighting) -> full "left, eye level" phrase
+    # - changed: the horizontal word changed -> short "slightly left" phrase
+    # - due:     enough time passed since we last spoke -> repeat as a reminder
     speak_v = acquired or v_zone != t.said_v
     changed = h_dir != t.said_h
     due = t.said_at is None or now - t.said_at >= cfg.direction_repeat_s
@@ -515,11 +811,14 @@ def _guide(s: State, box: Detection, now: float, cfg: GuidanceConfig,
             fx.append(say("direction_h", h=h_dir))
         t = replace(t, said_h=h_dir, said_v=v_zone, said_at=now)
     if cfg.getting_closer_enabled:
+        # "Getting closer": the box has grown noticeably since the reference height.
         ref = t.closer_ref_h
         if ref is None or box.h < ref:
+            # New (smaller) reference: the user moved back or this is the first measurement.
             t = replace(t, closer_ref_h=box.h)
         elif box.h >= ref * cfg.getting_closer_ratio and not fx and (
                 t.closer_said_at is None or now - t.closer_said_at >= cfg.getting_closer_repeat_s):
+            # Only say it if nothing else is being said this frame and not too soon after last time.
             fx.append(say("getting_closer"))
             t = replace(t, closer_ref_h=box.h, closer_said_at=now)
 
@@ -529,10 +828,12 @@ def _guide(s: State, box: Detection, now: float, cfg: GuidanceConfig,
 
 
 def _update_tone(s: State, box: Detection, cfg: GuidanceConfig) -> tuple[State, list[Effect]]:
+    """Send a new Tone effect only if the pan or interval changed enough to be worth it."""
     if not cfg.tones_enabled:
         return s, []
     pan, interval = tone_for(box, s.mode, cfg)
     prev = s.track.tone
+    # The backslash continues a long condition on the next line.
     if prev is not None and abs(prev[0] - pan) < cfg.tone_min_change_pan \
             and abs(prev[1] - interval) < cfg.tone_min_change_ms:
         return s, []
@@ -542,6 +843,12 @@ def _update_tone(s: State, box: Detection, cfg: GuidanceConfig) -> tuple[State, 
 
 
 def _timers(s: State, now: float, cfg: GuidanceConfig) -> tuple[State, list[Effect]]:
+    """Time-based rules, checked after EVERY event (including plain Ticks).
+
+    1. Lost: while guiding, the target has not been seen for lost_timeout_s -> back to SEARCHING.
+    2. Not seeing: while searching, nothing for not_found_prompt_s -> remind "I don't see X".
+    3. Identify time-out: the burst never completed -> finish with whatever votes we have.
+    """
     fx: list[Effect] = []
     if s.mode in TRACKING_MODES and s.track.last_seen_at is not None \
             and now - s.track.last_seen_at > cfg.lost_timeout_s:

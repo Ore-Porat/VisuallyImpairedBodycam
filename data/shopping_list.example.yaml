@@ -1,5 +1,17 @@
 # Example shopping list (FR-1). The live list is data/shopping_list.yaml (gitignored).
 # Edit with `slr list add <item>` etc. or the web editor at http://<laptop>:8767/
+#
+# What this file is for
+#   This is a sample of the file the laptop server keeps the shopping list in. The real
+#   list lives next to it as data/shopping_list.yaml and is not committed to git because it
+#   changes every shopping trip. Copy this file to that name to start with a ready-made list.
+#   FR-1 is a requirement number from the product spec, PRD.pdf.
+#
+# Format
+#   current: which item (counting from 0) the device is pointing at right now.
+#   items:   one entry per item. `name` must be an id from config/classes.yaml;
+#            `status` is "pending" (still to find) or "found" (already checked off).
+#   A plain list of names (items: [pasta, coffee]) is also accepted and means all pending.
 current: 0
 items:
   - name: pasta
