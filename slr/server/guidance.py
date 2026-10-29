@@ -442,6 +442,8 @@ def pick_identify_candidate(dets: tuple[Detection, ...], cfg: GuidanceConfig) ->
 
     Returns (class id, confidence) of the best box, or None if the frame had no boxes.
     """
+    # The shopper's hand (and any other non-item class) can never be the answer.
+    dets = tuple(d for d in dets if d.cls not in cfg.non_item_classes)
     if not dets:
         return None
 
@@ -747,7 +749,8 @@ def _check_wrong_item(s: State, f: Frame, det: Detection | None, now: float,
     if det is None:
         # Boxes of some other class, confident enough, and near the center of the frame.
         cands = [d for d in f.detections
-                 if d.cls != s.target and d.conf >= cfg.conf_wrong_item
+                 if d.cls != s.target and d.cls not in cfg.non_item_classes
+                 and d.conf >= cfg.conf_wrong_item
                  and abs(adjusted_center(d, cfg)[0] - 0.5) < cfg.wrong_item_center_tol
                  and abs(d.cy - 0.5) < cfg.wrong_item_center_tol * 2]
         if cands:

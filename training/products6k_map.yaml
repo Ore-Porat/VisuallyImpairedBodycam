@@ -1,0 +1,88 @@
+# Products-6K -> GrocerEye class rules, used by training/get_products6k_data.py.
+#
+# What this file is for
+#   Products-6K labels every product with text, mostly in Greek (specific category, broad
+#   category, brand, description), not with our 25 class ids. This file says which words mean
+#   which of our classes, so a product in the specific category "Καφές φίλτρου" (filter coffee)
+#   becomes `coffee`. English translations are in the comments.
+#
+# How matching works
+#   - Text is compared lowercased with accents removed, so "Καφές" = "καφες" = "ΚΑΦΕΣ".
+#   - A plain keyword matches a whole word, plus an optional plural "s"/"es":
+#     `bean` matches "bean" and "beans" but not "beanie".
+#   - A keyword ending in * matches the start of a word: `ζυμαρικ*` matches "ζυμαρικά" (pasta).
+#   - Multi-word keywords match those words in that order: `ξηροι καρποι` (dried nuts).
+#   - The fields are tried in the order of `fields` below; the first field with any match decides.
+#   - Inside one field, the match that starts EARLIEST in the text wins, and among matches at the
+#     same spot the LONGEST keyword wins. So "Χυμός λεμονιού" (lemon juice) hits the skip rule
+#     "χυμος λεμονιου" before the juice rule "χυμο*".
+#   - `skip` keywords throw the product out (it is not used at all).
+#
+# How to edit safely
+#   Class ids on the left must be ids from config/classes.yaml. Run
+#   `python training/get_products6k_data.py --inspect` to see every category in the dataset and
+#   which class it maps to (and why) before converting.
+
+# Which annotation columns to read, in priority order. The free-text `description` is left out
+# on purpose: product names mention flavors ("biscuits with chocolate", "soap with honey"), which
+# pulled detergents and biscuits into food classes when it was used.
+fields: [specific, broad]
+
+# Products in these categories are dropped even though a class keyword also matches.
+skip:
+  - χυμος λεμονιου              # lemon juice (a cooking bottle, not fruit juice)
+  - κρυο τσαι                   # iced tea powder
+  - δημητριακα μπαρες           # cereal bars (wrapped bars, not cereal boxes)
+  - μιγμα για                   # "mix for ..." (cake mix, pancake mix)
+  - φαγητα με                   # ready meals "with pasta / with vegetables" in cans
+  - μπισκοτ*                    # biscuits
+  - φουντουκοπαστ*              # hazelnut spread (Nutella-type jars)
+  - φυστικοβουτυρ*              # peanut butter
+  - παιδικο γαλα                # baby formula tins
+  - φιλτρα καφε                 # paper coffee filters
+  - κρεμα καφε                  # coffee creamer
+  - διακοσμητικ*                # cake decorations
+  - επιδορπια                   # chilled desserts
+  - λαχανικα με                 # frozen vegetables "with rice"
+  - τροφεσ                      # pet / fish food
+  - τροφη
+  - απιονισμενο                 # distilled water for irons
+  - λαδι παιδικο                # baby oil
+  - καρβουνακ*                  # incense charcoal
+
+classes:
+  beans: [bean, chickpea, lentil, οσπρι*, φασολ*, ρεβιθ*, ρεβυθ*, φακες]   # legumes, beans, chickpeas, lentils
+  cake: [cake, muffin, croissant, κεικ, κρουασαν*, τουρτ*, κεκακ*]  # cake, croissant, gateau
+  candy: [candy, candies, chewing gum, gummies, lollipop, marshmallow, καραμελα, καραμελες,
+          τσιχλ*, ζελεδ*, μασμελο*, λουκουμι, λουκουμια, ζαχαρωδ*, γλειφιτζουρ*]   # gum, jelly sweets, confectionery
+  cereal: [cereal, corn flakes, cornflakes, muesli, granola, δημητριακ*, μουσλι, νιφαδες βρωμης]
+  chips: [chips, crisps, πατατακ*, γαριδακ*, σνακ διαφορα]   # crisps, puffs, "various snacks" (Cheetos, nachos)
+  chocolate: [chocolate, σοκολατ*, γκοφρετ*, κουβερτουρ*]    # chocolate, wafers, baking chocolate
+  coffee: [coffee, espresso, cappuccino, καφε*, καφεσ]
+  corn: [sweet corn, sweetcorn, καλαμποκ*]
+  fish: [fish, tuna, sardine, salmon, mackerel, anchovy, anchovies, ψαρ*, τονοσ, τονου,
+         σαρδελ*, σολομ*, σκουμπρ*, γαυρ*, αντζουγ*]        # canned fish, tuna, sardines
+  flour: [flour, αλευρ*, σιμιγδαλ*]                       # flour, semolina
+  honey: [honey, μελι, ανθομελ*]                          # honey, blossom honey
+  jam: [jam, marmalade, μαρμελαδ*, γλυκα κουταλιου]       # jam, spoon sweets (jars)
+  juice: [juice, nectar, χυμο*, νεκταρ*, φρουτοποτ*]      # juices, nectars, fruit drinks
+  milk: [milk, γαλα, γαλατα, σοκολατουχο γαλα]                              # milk (fresh, long life, evaporated)
+  nuts: [nuts, peanuts, almonds, walnuts, pistachios, cashews, ξηροι καρποι, φιστικια,
+         φυστικια, αμυγδαλα, καρυδια, φουντουκια]          # dried nuts
+  oil: [oil, olive oil, sunflower oil, λαδι, ελαιολαδ*, σπορελαι*, ηλιελαι*, αραβοσιτελαι*]
+  pasta: [pasta, spaghetti, penne, macaroni, noodles, ζυμαρικ*, μακαρον*, σπαγγετ*, πενεσ,
+          χυλοπιτ*, κριθαρακ*, ταλιατελ*, κοφτο]          # pasta, spaghetti, orzo
+  rice: [rice, ρυζι*]                                     # rice
+  soda: [soda, cola, soft drink, lemonade, orangeade, αναψυκτικ*, πορτοκαλαδ*, λεμοναδ*, γκαζοζ*]
+  spices: [spices, herbs, seasoning, μπαχαρ*, ριγαν*, κανελα, πιπερι, καρυκευμ*]
+  sugar: [sugar, ζαχαρη, ζαχαρεσ]
+  tea: [tea, herbal tea, τσαι, αφεψημ*, χαμομηλ*]         # tea, herbal infusions, chamomile
+  tomato_sauce: [tomato sauce, passata, pasta sauce, χυμος τοματας, σαλτσες ζυμαρικων, τοματ*, ντοματ*, κονκασε, πελτε*, σαλτσα ντοματας, πασσατα]
+  vinegar: [vinegar, balsamic, ξυδι, ξυδια, βαλσαμικ*]
+  water: [water, mineral water, νερο, νερα, εμφιαλωμενο νερο]
+
+# Fix single products by product id when the rules get one wrong. `null` drops the product.
+#   sku_overrides:
+#     18283: coffee
+#     20117: null
+sku_overrides: {}

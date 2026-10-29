@@ -141,3 +141,10 @@ def test_clip_store_renders_once_and_manifest(tmp_path, catalog):
     h = store.manifest_hash()
     reloaded = ClipStore(tmp_path / "clips", BeepTTS())
     assert reloaded.manifest_hash() == h
+
+
+def test_item_classes_drops_the_hand():
+    from slr.common.config import item_classes
+    classes = {"pasta": "pasta", "hand": "hand", "rice": "rice"}
+    assert item_classes(classes, ["hand"]) == {"pasta": "pasta", "rice": "rice"}
+    assert item_classes(classes, []) == classes

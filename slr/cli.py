@@ -45,7 +45,7 @@ import sys
 import time
 from pathlib import Path
 
-from slr.common.config import (ConfigError, default_config_dir, load_classes, load_controls_config,
+from slr.common.config import (ConfigError, default_config_dir, item_classes, load_classes, load_controls_config,
                                load_device_config, load_server_config)
 
 
@@ -124,7 +124,8 @@ def cmd_list(args) -> None:
 
     cfg = load_server_config(args.config_dir)
     # Valid item names come from the model's class list.
-    classes = load_classes(cfg.path(cfg.model.classes_file))
+    classes = item_classes(load_classes(cfg.path(cfg.model.classes_file)),
+                           cfg.guidance.non_item_classes)   # no "hand" on the list
     lst = ShoppingList(cfg.path(cfg.paths.shopping_list), classes)
     # ``slr list add tomato sauce`` arrives as two words; join them back into one name.
     # getattr(..., None) is used because "show"/"clear" have no ``item`` argument at all.

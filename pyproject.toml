@@ -64,6 +64,7 @@ training = [
     "ultralytics>=8.3",
     "opencv-python>=4.8",
     "albumentations>=1.4",   # blur + JPEG augmentation during training
+    "openpyxl>=3.1",         # reads the Products-6K .xlsx labels (get_products6k_data.py)
 ]
 # Developer tools: pytest runs the tests in tests/; pytest-asyncio lets tests use async code.
 dev = [

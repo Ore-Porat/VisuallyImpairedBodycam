@@ -6,6 +6,7 @@ All commands run from the repo root with the venv active (`pip install -e .[trai
 | Where | What |
 |---|---|
 | `data/grocereye/` | converted Freiburg / 5K Groceries dataset, `data.yaml`, `split.json` (gitignored) |
+| `data/products6k/` | converted Products-6K, `data.yaml`, `manifest.json`, `boxes.json`, `review/` (gitignored) |
 | `data/raw/<session>/` | photos from `capture.py` (gitignored) |
 | `runs/` | Ultralytics run folders (gitignored) |
 | `models/<name>/best.pt` | published weights (gitignored), next to `eval_report.md` (tracked) |
@@ -28,6 +29,58 @@ python training/evaluate.py --weights models/grocereye_a/best.pt
 - No local GPU? Use `training/train_colab.ipynb`.
 - Smoke test first: `python training/train.py --name smoke --epochs 1 --fraction 0.05`.
 - Target (NFR-5): test mAP50 >= 0.85, which matches or beats GrocerEye's 84.59%.
+
+## Extra data: Products-6K (optional, between Stage A and Stage B)
+
+[Products-6K](https://zenodo.org/records/4428917) is a grocery dataset from the Greek supermarket
+Masoutis, made for visually impaired shoppers: studio photos of 500 products plus phone photos of
+104 of them held in a hand inside the store. It has **no boxes** and its labels are Greek category
+text, so `get_products6k_data.py` converts it:
+
+- **Classes:** each product's category ("Καφές φίλτρου" = filter coffee) is mapped to one of our 25
+  ids by the keyword rules in `training/products6k_map.yaml`. About 210 of the 512 public products
+  map; the rest (detergent, biscuits, beer, ...) are left out. `--inspect` prints the full table.
+- **Boxes:** studio photos have a plain white background, so the box is everything that is not
+  background (exact, no AI). In-store photos and messy backdrops use Grounding DINO
+  (`pip install transformers`; GPU recommended, so the Colab notebook is the easy route).
+- **Split:** by product, stratified by class, 70/15/15 (seed 0), so photos of one product never
+  land in both train and test. Near-duplicate photos of one product are dropped.
+- **Check:** look at `data/products6k/review/sheet_*.jpg` (least certain boxes first). Fix or skip
+  a photo in `data/products6k/boxes.json` and rerun.
+
+```
+python training/get_products6k_data.py --inspect        # what maps to what; writes nothing
+python training/get_products6k_data.py                  # uses data/Candidate_Set (+ data/Query_Set)
+python training/train.py --name grocereye_p6k --model models/grocereye_a/best.pt \
+    --data data/grocereye/data.yaml --data data/products6k/data.yaml --epochs 60
+python training/evaluate.py --weights models/grocereye_p6k/best.pt --data data/products6k/data.yaml
+```
+
+Extract `Candidate_Set.rar` (and `Query_Set.rar`, 2.7 GB) into `data/` first, or let the script
+fetch them with `--download all`. On Colab use `training/train_products6k_colab.ipynb`. License:
+CC BY-NC-ND 4.0, so the converted copy must not be shared (it stays in gitignored `data/`).
+
+## Extra class: the shopper's hand (optional, after Products-6K)
+
+The long-term goal is to guide the hand to the item, so the detector also learns a `hand` class.
+It is the **last** class (id 25) in `config/classes.yaml` and `data/grocereye/data.yaml`, so the
+25 grocery ids are unchanged. The guidance engine never speaks it as a found, wrong or identified
+item (`guidance.non_item_classes` in `config/server.yaml`).
+
+Labels come from `get_hands_data.py`: Grounding DINO boxes the hand in every Products-6K in-store
+photo (the Query_Set, where a product is always held in a hand), appends those boxes to the
+converted set's labels, and adds the in-store photos the product conversion left out as hand-only
+images. Freiburg photos have no hands, so they are the "no hand here" examples.
+
+```
+python training/get_hands_data.py --device cuda      # data/products6k_v2 -> data/products6k_hands
+python training/train.py --name grocereye_hand --model models/grocereye_p6k2/best.pt     --data data/grocereye/data.yaml --data data/products6k_hands/data.yaml --epochs 60
+python training/evaluate.py --weights models/grocereye_hand/best.pt --data data/products6k_hands/data.yaml
+```
+
+Check `data/products6k_hands/review/sheet_*.jpg`; to drop a photo's hand boxes set `"skip": true`
+for it in `hand_boxes.json` and rerun. A dedicated egocentric hand dataset (EgoHands, 100DOH) would
+add far more variety than the ~370 in-store photos; the converter would only need a second source.
 
 ## Stage B: our own photos (TR-10 to TR-13)
 

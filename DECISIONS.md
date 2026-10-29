@@ -35,6 +35,7 @@ Choices made where the PRD (`PRD.pdf`) was ambiguous or left room (PRD rule 7). 
 - Within-reach exits back to guiding only when the box drops below `reach_h * 0.8` or leaves the straight-ahead zone, to avoid flicker.
 - "Getting closer" (FR-22, P2) is implemented but off by default.
 - On device disconnect the server quietly goes to STANDBY; the device re-sends its switch position on reconnect, so the user hears "Connected" then "Ready". An active search is not resumed.
+- `non_item_classes` (default `[hand]`): detector classes that are never spoken as a found, wrong (FR-20) or identified (FR-31) item. The hand is detected so later guidance can steer it to the item; today it is only filtered out.
 
 ## Audio (FR-60..66)
 - Priorities: system 3 > confirmation 2 > guidance 1 > info 0. Each phrase's priority is in `phrases.yaml`.
@@ -76,3 +77,9 @@ Choices made where the PRD (`PRD.pdf`) was ambiguous or left room (PRD rule 7). 
 - Stage B combining remaps class ids by name, so a Roboflow export with only the demo categories works.
 - GrocerEye's 84.59% is compared against our mAP50 (it was Darknet mAP@0.5 on a different split).
 - `pick_threshold.py` matches greedily at IoU >= 0.5; a class with no predictions counts as passing precision (with a warning); it refuses `--write` if no threshold qualifies.
+- Products-6K (extra data) is mapped onto the existing 25 classes instead of adding classes or training per product (SKU): 1 to 5 photos per SKU is too few for detection, and the shopping list, `classes.yaml` and guidance stay unchanged.
+- Products-6K class mapping uses only the specific and broad category columns. The free-text description was tried and dropped: flavor words pulled biscuits, soap and detergent into food classes.
+- Products-6K boxes: studio photos use a plain-background box (exact); Grounding DINO (tiny) only for in-store photos and backdrops that are not clearly plain (edge-uniformity score < 0.8). Boxes are cached in `boxes.json` so manual fixes survive reruns.
+- Products-6K split is by product, stratified by class, 70/15/15 with seed 0 (larger val/test shares than Freiburg because many classes have only a handful of products). Near-duplicate photos of one product (difference hash within 4 bits) are dropped.
+- Products-6K in-store boxes (2026-10-27/28): the default DINO prompt `"{name}. grocery product."` boxed the whole shelf on a quarter of the hand-held photos; the plain `"{name}."` prompt fixed most of those but found nothing on 34. The kept set (`data/products6k_v2`) merges both runs and skips 36 photos. grocereye_p6k2 (trained on it) is the server model: Freiburg test mAP50 0.922, Products-6K test 0.796 (Stage A alone: 0.300).
+- Hand class: a 26th class `hand`, last in the id order so the 25 grocery ids do not move. First labels are Grounding DINO `"hand."` boxes on the ~370 Products-6K in-store photos (`get_hands_data.py`), which match the bodycam view; an egocentric hand dataset is the next step if the in-store photos are not enough.

@@ -785,3 +785,25 @@ def test_step_is_pure():
     s2, fx2 = g.step(s, frame(det()), 5.0, CFG)
     assert s1 == s2 and fx1 == fx2
     assert s.track.history == ()  # input state untouched
+
+
+# --------------------------------------------------------------------------- non-item classes
+
+
+def test_identify_never_picks_a_non_item_class():
+    """The shopper's hand is a detector class but can never be the identify answer."""
+    cfg = GuidanceConfig()
+    assert "hand" in cfg.non_item_classes
+    assert g.pick_identify_candidate((det("hand", 0.95), det("pasta", 0.8)), cfg) == ("pasta", 0.8)
+    assert g.pick_identify_candidate((det("hand", 0.95),), cfg) is None
+
+
+def test_wrong_item_ignores_the_hand():
+    """A confident, centered hand while searching for pasta must not trigger "that's hand"."""
+    d = searching_driver()
+    fx = d.frames(6, det("hand", 0.95, cx=0.5, cy=0.5))
+    assert "wrong_item" not in keys(fx)
+    # ...while a confident, centered other list item still does.
+    d = searching_driver()
+    fx = d.frames(6, det("rice", 0.95, cx=0.5, cy=0.5))
+    assert "wrong_item" in keys(fx)

@@ -44,3 +44,6 @@ classes:
   tomato_sauce: tomato sauce
   vinegar: vinegar
   water: water
+  # Not a grocery item: the shopper's own hand, so guidance can steer it to the item later.
+  # The guidance engine never names it as a found / wrong / identified item.
+  hand: hand

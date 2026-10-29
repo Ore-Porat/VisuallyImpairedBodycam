@@ -55,7 +55,7 @@ from websockets.asyncio.server import ServerConnection, serve
 
 from slr import __version__
 from slr.common import protocol as p
-from slr.common.config import ServerConfig, load_classes
+from slr.common.config import ServerConfig, item_classes, load_classes
 from slr.server import guidance as g
 from slr.server.clips import ClipStore, PhraseCatalog, make_tts, voice_tag
 from slr.server.core import ServerCore
@@ -119,7 +119,9 @@ class ServerApp:
         self.catalog = PhraseCatalog.load(cfg.root / "config" / "phrases.yaml", self.classes,
                                           voice_tag(cfg.tts, self.tts))
         self.clips = ClipStore(cfg.path(cfg.paths.clips_dir), self.tts)
-        self.shopping = ShoppingList(cfg.path(cfg.paths.shopping_list), self.classes)
+        # The list (and its web editor) only offers real items: the hand class is left out.
+        self.item_classes = item_classes(self.classes, cfg.guidance.non_item_classes)
+        self.shopping = ShoppingList(cfg.path(cfg.paths.shopping_list), self.item_classes)
         for name in self.shopping.unknown_items():
             log.warning("shopping list item %r is not a class of the loaded model", name)
         self.session_log = SessionLog(cfg.path(cfg.paths.logs_dir))
@@ -375,7 +377,7 @@ class ServerApp:
 
     def _page_data(self):
         """Data for the web page: (items, current index, class id -> spoken name)."""
-        return list(self.shopping.items), self.shopping.current, self.classes
+        return list(self.shopping.items), self.shopping.current, self.item_classes
 
     def _list_op_threadsafe(self, op: str, arg: str) -> str:
         """Called from the HTTP server's thread: run ``_list_op`` on the event loop and wait."""

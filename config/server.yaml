@@ -26,10 +26,12 @@ network:
 
 # The object-detection model (YOLO). "weights" is the trained model file.
 model:
-  # Stage A GrocerEye model (test mAP50 0.930, see models/grocereye_a/eval_report.md).
+  # Stage A + Products-6K model, second pass with cleaner in-store boxes (Freiburg test mAP50 0.922;
+  # Products-6K v2 test mAP50 0.796 vs 0.780 for grocereye_p6k and 0.300 for Stage A alone;
+  # see models/grocereye_p6k2/eval_report.md). Previous: models/grocereye_a/best.pt (0.930).
   # Stock COCO for pipeline debugging: weights: yolo11n.pt, classes_file: config/classes_coco.yaml, imgsz: 640
   backend: ultralytics   # ultralytics | darknet_opencv | scripted
-  weights: models/grocereye_a/best.pt
+  weights: models/grocereye_p6k2/best.pt
   classes_file: config/classes.yaml   # id -> spoken name for the classes this model knows
   device: auto           # auto picks CUDA, then Apple MPS, then CPU
   imgsz: 320          # match the training size
@@ -83,6 +85,7 @@ guidance:
   wrong_item_enabled: true
   wrong_item_center_tol: 0.15   # the other item must be this close to center to be mentioned
   wrong_item_repeat_s: 5.0      # repeat the warning no more often than this
+  non_item_classes: [hand]      # detector classes that are never spoken as an item (FR-20, FR-31)
 
   # Panned guidance tone (FR-21)
   # A beep in the headphones that comes from the target's side and speeds up as you get close.

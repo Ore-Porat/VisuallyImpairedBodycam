@@ -189,6 +189,10 @@ class GuidanceConfig(_Model):
     wrong_item_center_tol: float = 0.15
     wrong_item_repeat_s: float = 5.0
 
+    # Classes the detector knows that are not shopping items (the shopper's own hand). They are
+    # never spoken as a found, wrong or identified item; later guidance will use them to steer.
+    non_item_classes: list[str] = ["hand"]
+
     # Optional beeps that speed up as the item gets closer and pan left/right with it.
     tones_enabled: bool = True
     tone_freq_hz: int = 880
@@ -589,6 +593,15 @@ def load_controls_config(config_dir: Path | None = None) -> ControlsConfig:
     """Load config/controls.yaml."""
     path = (config_dir or default_config_dir()) / "controls.yaml"
     return _build(ControlsConfig, read_yaml(path), path)
+
+
+def item_classes(classes: dict[str, str], non_item_classes: list[str]) -> dict[str, str]:
+    """The classes a shopper may put on the list: ``classes`` minus the non-item ones (the hand).
+
+    The detector still reports non-item classes; they just cannot be shopping-list items.
+    """
+    skip = set(non_item_classes)
+    return {k: v for k, v in classes.items() if k not in skip}
 
 
 def load_classes(path: Path) -> dict[str, str]:

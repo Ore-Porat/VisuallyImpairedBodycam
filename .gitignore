@@ -39,3 +39,5 @@ Thumbs.db
 # the released model is small enough to version (TR-15)
 !models/grocereye_a/best.pt
 !models/grocereye_a/results.csv
+!models/grocereye_p6k2/best.pt
+!models/grocereye_p6k2/results.csv
