@@ -146,6 +146,9 @@ class FrameSender(asyncio.DatagramProtocol):
         self.frame_id = 0                      # increments per frame sent
         self._in_flight: int | None = None     # frame_id awaiting an ack, or None
         self._last_send = 0.0
+        # Smoothed capture + JPEG-encode time. The sender starts work this long before the
+        # next send deadline so max_fps includes that work instead of adding it on top.
+        self._capture_encode_s = 0.0
         self._send_wall: dict[int, float] = {}   # frame_id -> wall-clock time it was sent
         self._wake = asyncio.Event()           # set when streaming turns on
         self._ack = asyncio.Event()            # set when the in-flight frame is acked
@@ -280,13 +283,18 @@ class FrameSender(asyncio.DatagramProtocol):
                     await asyncio.wait_for(self._ack.wait(), remaining)
                 except asyncio.TimeoutError:
                     pass
-            # Enforce the frame-rate cap: sleep until 1/max_fps seconds after the last send.
-            gap = self._last_send + 1 / max(self.max_fps, 0.1) - time.monotonic()
-            if gap > 0:
-                await asyncio.sleep(gap)
+            # Frame-rate pacing. The target is one frame interval after the last send.
+            # Start capture/encode early enough that the work finishes at the target time;
+            # otherwise a fixed sleep + capture + encode would turn 10 fps into ~7 fps.
+            target = self._last_send + 1 / max(self.max_fps, 0.1)
+            start = target - self._capture_encode_s
+            now = time.monotonic()
+            if start > now:
+                await asyncio.sleep(start - now)
             if not self.streaming:
                 continue
             # Capture and encode on the worker thread (both are slow, CPU-bound jobs).
+            work_start = time.monotonic()
             try:
                 img = await loop.run_in_executor(self.pool, self.camera.capture)
                 capture_ms = int(time.time() * 1000)
@@ -297,10 +305,20 @@ class FrameSender(asyncio.DatagramProtocol):
                 if self.on_camera_error:
                     self.on_camera_error(str(e))
                 continue
+            # Smooth the estimate over several frames so one slow frame does not skew pacing.
+            elapsed = time.monotonic() - work_start
+            self._capture_encode_s = (elapsed if self._capture_encode_s <= 0
+                                      else 0.7 * self._capture_encode_s + 0.3 * elapsed)
             if jpeg is None:
                 self.dropped_too_big += 1
                 log.warning("frame too large even at minimum JPEG quality; skipped")
                 self._last_send = time.monotonic()
+                continue
+            # Capture may have finished a little early; wait for the exact send target.
+            gap = target - time.monotonic()
+            if gap > 0:
+                await asyncio.sleep(gap)
+            if not self.streaming:
                 continue
             self._send(img, jpeg, capture_ms)
 

@@ -39,8 +39,8 @@ camera:
 # Sending frames to the laptop. One frame is "in flight" at a time: the next is sent only
 # after the laptop acknowledges the previous one (or ack_timeout_ms passes).
 streaming:
-  max_fps: 10                # never send more than this many frames per second
-  ack_timeout_ms: 300        # give up waiting for an ack after this long (milliseconds)
+  max_fps: 20                # never send more than this many frames per second
+  ack_timeout_ms: 150        # give up waiting for an ack after this long (milliseconds)
   max_datagram_bytes: 60000  # a UDP packet must fit in this many bytes (header + JPEG)
   jpeg_quality_start: 75     # JPEG quality 1..100; higher = sharper but bigger
   jpeg_quality_step: 10      # lower quality by this much when a frame is too big

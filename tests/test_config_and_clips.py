@@ -56,7 +56,7 @@ def test_sim_overlay():
     assert d.audio.dac == "none"
     assert d.server.host == "127.0.0.1"
     assert d.volume.source == "keyboard"
-    assert d.streaming.max_fps == 10  # untouched keys survive the merge
+    assert d.streaming.max_fps == 20  # untouched keys survive the merge
 
 
 def test_classes_files_load():

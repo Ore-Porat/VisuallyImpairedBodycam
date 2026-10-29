@@ -114,7 +114,8 @@ guidance:
   getting_closer_repeat_s: 3.0
 
   # Maximum frames per second the device is asked to stream.
-  stream_max_fps: 10
+  # 20 fps is a sustainable target for the Pi Zero 2 W at 640x480.
+  stream_max_fps: 20
   # Keep the camera live while the mode switch is ON, even before a search starts.
   # The model still runs on these frames, so the debug view shows boxes, but no search,
   # guidance speech or tones start until Identify (burst) or Enter is used.
