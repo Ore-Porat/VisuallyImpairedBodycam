@@ -20,7 +20,7 @@ device_id: slr-01
 
 # How to reach the laptop server.
 server:
-  host: 10.42.0.1        # laptop hotspot address; "auto" = discover via mDNS (_slrslr._tcp)
+  host: 192.168.1.3        # laptop hotspot address; "auto" = discover via mDNS (_slrslr._tcp)
   ws_port: 8765          # WebSocket port: button events go up, spoken cues come down
   udp_port: 8766         # UDP port: camera frames go up, acks come down
   http_port: 8767        # HTTP port: the device downloads audio clips from here
