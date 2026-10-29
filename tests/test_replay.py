@@ -36,6 +36,7 @@ def test_find_flow_replay(frames_dir, scripted_detector):
     """A full Find: switch on, press enter, walk up to pasta, press enter to check it off."""
     # Arrange: real server config, a list of two items, and three scripted button presses.
     cfg = load_server_config()
+    cfg.model.classes_file = "config/classes.yaml"   # the scripted detections are grocery classes
     # This replay checks the manual Enter flow and the on-demand stream.
     cfg.guidance.stream_in_idle = False
     cfg.guidance.auto_find_on_mode_on = False
@@ -64,6 +65,7 @@ def test_find_flow_replay(frames_dir, scripted_detector):
 def test_identify_replay(frames_dir):
     """Identify mode: one burst of 5 frames showing coffee ends in 'This is coffee. It's on your list.'"""
     cfg = load_server_config()
+    cfg.model.classes_file = "config/classes.yaml"   # the scripted detections are grocery classes
     # Keep the burst exactly five frames; live video would keep the detector running.
     cfg.guidance.stream_in_idle = False
     cfg.guidance.auto_find_on_mode_on = False

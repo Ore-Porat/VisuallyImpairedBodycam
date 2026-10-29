@@ -135,6 +135,45 @@ class UltralyticsDetector:
         return out
 
 
+class HandOverlayDetector:
+    """The main detector plus a second one that only contributes ``hand`` boxes.
+
+    The product model (e.g. models/snacks_yolo11n.pt) may know nothing about hands; the hand
+    model (e.g. models/grocereye_hand/best.pt) runs on the same frame and only its ``hand``
+    detections are kept. ``names`` is the main list plus ``hand`` so the server treats it as
+    one model.
+    """
+
+    def __init__(self, main: Detector, hands: Detector, hand_class: str = "hand"):
+        self.main, self.hands, self.hand_class = main, hands, hand_class
+        self.names = list(main.names) + ([] if hand_class in main.names else [hand_class])
+
+    def warmup(self) -> None:
+        for d in (self.main, self.hands):
+            if hasattr(d, "warmup"):
+                d.warmup()
+
+    def detect(self, image: np.ndarray) -> list[Detection]:
+        out = [d for d in self.main.detect(image) if d.cls != self.hand_class]
+        out.extend(d for d in self.hands.detect(image) if d.cls == self.hand_class)
+        return out
+
+
+class IgnoreClassesDetector:
+    """Drops every detection of the given classes, as if the model did not know them."""
+
+    def __init__(self, inner: Detector, ignore: list[str]):
+        self.inner, self.ignore = inner, set(ignore)
+        self.names = [n for n in inner.names if n not in self.ignore]
+
+    def warmup(self) -> None:
+        if hasattr(self.inner, "warmup"):
+            self.inner.warmup()
+
+    def detect(self, image: np.ndarray) -> list[Detection]:
+        return [d for d in self.inner.detect(image) if d.cls not in self.ignore]
+
+
 class DarknetOpenCVDetector:
     """Original GrocerEye YOLOv3 weights, if the team obtains them.
 
@@ -228,7 +267,16 @@ def load_detector(cfg: ServerConfig) -> Detector:
         if cfg.path(weights).exists():
             weights = str(cfg.path(weights))
         # else: a bare name like "yolo11n.pt" that ultralytics downloads once and caches
-        return UltralyticsDetector(weights, m.device, m.imgsz, m.min_conf, m.half)
+        det = UltralyticsDetector(weights, m.device, m.imgsz, m.min_conf, m.half)
+        if m.hand_weights:
+            hands = UltralyticsDetector(str(cfg.path(m.hand_weights)), m.device, m.hand_imgsz,
+                                        m.min_conf, m.half)
+            det = HandOverlayDetector(det, hands, cfg.guidance.hand_class)
+            log.info("hand boxes come from %s", m.hand_weights)
+        if m.ignore_classes:
+            det = IgnoreClassesDetector(det, m.ignore_classes)
+            log.info("ignoring classes %s", m.ignore_classes)
+        return det
     if m.backend == "darknet_opencv":
         if not (m.darknet_cfg and m.darknet_weights):
             raise ValueError("darknet_opencv backend needs model.darknet_cfg and model.darknet_weights")

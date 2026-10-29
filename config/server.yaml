@@ -26,20 +26,27 @@ network:
 
 # The object-detection model (YOLO). "weights" is the trained model file.
 model:
-  # Stage A + Products-6K + hand model, 26 classes (Freiburg test mAP50 0.925; Products-6K v2 test
-  # 0.773 on the grocery classes; hand AP50 0.982; see models/grocereye_hand/eval_report.md).
-  # Previous: models/grocereye_p6k2/best.pt (25 classes, Freiburg 0.922, Products-6K 0.796).
-  # Stock COCO for pipeline debugging: weights: yolo11n.pt, classes_file: config/classes_coco.yaml, imgsz: 640
+  # Snack demo model: YOLO11n trained by the team on photos of the six demo products
+  # (oreo, cheerios, coca_cola_can, campbells_chicken_noodle, lays, cheetos), imgsz 640, from
+  # runs/detect/train (epoch 33 of a run stopped at 37; val mAP50 ~0.84). No hand class.
+  # Grocery models (27 classes incl. hand, config/classes.yaml, imgsz 320): models/p6k_hands_only/best.pt
+  # (Products-6K only, test mAP50 0.753), models/grocereye_hand/best.pt (with Freiburg, 0.925 / 0.773).
   backend: ultralytics   # ultralytics | darknet_opencv | scripted
-  weights: models/grocereye_hand/best.pt
-  classes_file: config/classes.yaml   # id -> spoken name for the classes this model knows
+  weights: models/snacks_yolo11n.pt
+  classes_file: config/classes_snacks.yaml   # id -> spoken name for the classes this model knows
   device: auto           # auto picks CUDA, then Apple MPS, then CPU
-  imgsz: 320          # match the training size
+  imgsz: 640          # match the training size
   min_conf: 0.25         # detector floor; the guidance thresholds below decide what gets spoken
   half: false            # 16-bit floating point on the GPU: faster, slightly less precise
   darknet_cfg: null      # darknet_opencv backend only
   darknet_weights: null
   scripted_file: null    # scripted backend only (tests / replay without a model)
+  # Second model that only supplies the shopper's hand (the snack model has no hand class):
+  # the grocery+hand model from 2026-10-28, hand AP50 0.98 on Products-6K photos. null = off.
+  hand_weights: models/grocereye_hand/best.pt
+  hand_imgsz: 320        # that model was trained at 320
+  # Classes to mute (never drawn, spoken or listed). Temporary for the demo: cheetos.
+  ignore_classes: [cheetos]
 
 # The guidance engine: how detections become spoken directions (slr/server/guidance.py).
 guidance:

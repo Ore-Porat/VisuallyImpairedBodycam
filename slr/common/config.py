@@ -126,6 +126,14 @@ class ModelConfig(_Model):
     darknet_weights: str | None = None
     # Only used by the scripted backend: a JSON file of pre-recorded detections.
     scripted_file: str | None = None
+    # Optional second YOLO model whose ONLY job is to find the shopper's hand (its ``hand``
+    # class is merged into the main model's detections, everything else it sees is dropped).
+    # Lets a product model without a hand class still drive hand guidance. None = off.
+    hand_weights: str | None = None
+    hand_imgsz: int = 320
+    # Classes the model knows but the server should act as if it never saw (not drawn, not
+    # spoken, not on the list). Handy to mute one class for a demo without retraining.
+    ignore_classes: list[str] = []
 
 
 class GuidanceConfig(_Model):

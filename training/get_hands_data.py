@@ -105,9 +105,9 @@ def main(argv: list[str] | None = None) -> int:
     src, out, query = repo(args.src), repo(args.out), repo(args.query)
     doc = yaml.safe_load((src / "data.yaml").read_text(encoding="utf-8"))
     names = [str(n) for n in doc["names"]]
-    if "hand" in names:
-        raise SystemExit(f"{src} already has a hand class")
-    names.append("hand")
+    # The source may already list "hand" (config/classes.yaml has it); otherwise append it last.
+    if "hand" not in names:
+        names.append("hand")
     hand_id = names.index("hand")
     manifest = json.loads((src / "manifest.json").read_text(encoding="utf-8"))
     by_rel = {e["source"]: e for e in manifest["images"]}

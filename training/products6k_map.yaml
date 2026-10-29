@@ -35,7 +35,7 @@ skip:
   - δημητριακα μπαρες           # cereal bars (wrapped bars, not cereal boxes)
   - μιγμα για                   # "mix for ..." (cake mix, pancake mix)
   - φαγητα με                   # ready meals "with pasta / with vegetables" in cans
-  - μπισκοτ*                    # biscuits
+  - μπισκοτα αλμυρα             # salty biscuits / crackers (sweet biscuits -> cookies)
   - φουντουκοπαστ*              # hazelnut spread (Nutella-type jars)
   - φυστικοβουτυρ*              # peanut butter
   - παιδικο γαλα                # baby formula tins
@@ -51,6 +51,8 @@ skip:
   - καρβουνακ*                  # incense charcoal
 
 classes:
+  cookies:
+    - μπισκοτ*                  # biscuits (plain, filled like Oreos, coated); crackers are skipped above
   beans: [bean, chickpea, lentil, οσπρι*, φασολ*, ρεβιθ*, ρεβυθ*, φακες]   # legumes, beans, chickpeas, lentils
   cake: [cake, muffin, croissant, κεικ, κρουασαν*, τουρτ*, κεκακ*]  # cake, croissant, gateau
   candy: [candy, candies, chewing gum, gummies, lollipop, marshmallow, καραμελα, καραμελες,

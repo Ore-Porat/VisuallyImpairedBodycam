@@ -1,0 +1,22 @@
+# Snack demo classes for models/snacks_yolo11n.pt: class_id -> spoken name (FR-62).
+#
+# What this file is for
+#   The snack model was trained (training run runs/detect/train, YOLO11n, imgsz 640) on photos
+#   of the six products we demo with. The ids below are in the model's own class order
+#   (0..5), so do NOT reorder or rename them unless the model is retrained. The right side
+#   is only what the voice says; change it freely ("Coke", "a can of Coke", ...).
+#
+# Who reads it
+#   config/server.yaml points at it with `model.classes_file`. `slr list classes` prints the
+#   ids; `slr list add oreo` adds an item.
+#
+# This model has no `hand` class; `model.hand_weights` in server.yaml adds a second model
+# that only contributes hand boxes, so hand guidance works (the hand is never a list item).
+classes:
+  oreo: Oreos
+  cheerios: Cheerios
+  coca_cola_can: Coca-Cola can
+  campbells_chicken_noodle: Campbell's chicken noodle soup
+  lays: Lay's chips
+  # cheetos: Cheetos   # muted for the demo via model.ignore_classes in server.yaml
+  hand: hand

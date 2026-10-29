@@ -42,3 +42,4 @@ Thumbs.db
 !models/grocereye_p6k2/best.pt
 !models/grocereye_p6k2/results.csv
 !models/grocereye_hand/best.pt
+!models/snacks_yolo11n.pt

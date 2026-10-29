@@ -57,6 +57,9 @@ def configs(tmp_path):
     scfg.network.host = "127.0.0.1"
     scfg.network.mdns = False
     scfg.tts.engines = ["beep"]
+    # The scripted detector below reports grocery classes (pasta, coffee), so use the grocery
+    # class list whatever model config/server.yaml currently ships with.
+    scfg.model.classes_file = "config/classes.yaml"
     # This test checks the manual Enter flow and the on-demand stream.
     scfg.guidance.stream_in_idle = False
     scfg.guidance.auto_find_on_mode_on = False

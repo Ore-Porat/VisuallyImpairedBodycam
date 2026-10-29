@@ -82,6 +82,34 @@ Check `data/products6k_hands/review/sheet_*.jpg`; to drop a photo's hand boxes s
 for it in `hand_boxes.json` and rerun. A dedicated egocentric hand dataset (EgoHands, 100DOH) would
 add far more variety than the ~370 in-store photos; the converter would only need a second source.
 
+## EgoHands: more hands (optional)
+
+[EgoHands](https://vision.soic.indiana.edu/projects/egohands) is 4,800 first-person frames with every
+hand outlined. `get_egohands_data.py` turns the outlines into boxes and writes a one-class YOLO set
+split by video. The official zip link is dead; get `egohands_data.zip` from the Roboflow or Kaggle
+re-hosts (both need a free account) and unpack it so `data/egohands/_LABELLED_SAMPLES/<video>/`
+exists:
+
+```
+python training/get_egohands_data.py                   # -> data/egohands_yolo (names: [hand])
+python training/train.py --name p6k_egohands --model yolo11n.pt     --data data/products6k_hands_v2/data.yaml --data data/egohands_yolo/data.yaml --epochs 80
+```
+
+## Our own products, boxes drawn automatically
+
+`autolabel_ours.py` replaces hand labeling for the demo products. Capture one session per product
+and setup with `capture.py`, then let Grounding DINO draw the box (each session shows one product):
+
+```
+python training/capture.py --session oreos_desk --interval 1 --max 80
+python training/capture.py --session oreos_kitchen --interval 1 --max 40      # a second setup
+python training/autolabel_ours.py --device cuda     --session oreos_desk=cookies --session oreos_kitchen=cookies:test     --session cheerios_desk=cereal --session cola_desk=soda:val --session empty_desk=background
+```
+
+Check `data/ours/review/`, fix or skip the odd photo in `data/ours/boxes.json`, then train on
+Products-6K + ours together (see Stage B below for the targets). Put a different session in the
+test split than in train: the same session in both would make the score meaningless (TR-12).
+
 ## Stage B: our own photos (TR-10 to TR-13)
 
 1. **Pick 8 to 12 demo categories** (TR-10). Include look-alikes: pasta vs rice, coffee vs tea, juice vs soda.

@@ -102,7 +102,7 @@ def test_compile_rules_rejects_unknown_class():
     ("Χυμός λεμονιού", "ΞΥΔΙ-ΧΥΜΟΣ ΛΕΜΟΝΙΟΥ", None),     # skip rule beats juice
     ("Δημητριακά μπάρες", "ΠΡΩΙΝΑ", None),                 # cereal bars are skipped
     ("Φίλτρα καφέ", "ΚΑΦΕΔΕΣ", None),                      # paper coffee filters
-    ("Μπισκότα απλά", "ΜΠΙΣΚΟΤΑ", None),
+    ("Μπισκότα απλά", "ΜΠΙΣΚΟΤΑ", "cookies"),
     ("Υγρά καθαριστικά", "ΚΑΘΑΡΙΣΤΙΚΑ", None),
     ("Κανελόνια", "ΖΥΜΑΡΙΚΑ", "pasta"),                    # not cinnamon (spices)
 ])

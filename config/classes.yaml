@@ -44,6 +44,7 @@ classes:
   tomato_sauce: tomato sauce
   vinegar: vinegar
   water: water
+  cookies: cookies   # sweet biscuits (Oreos); added 2026-10-28 from Products-6K
   # Not a grocery item: the shopper's own hand, so guidance can steer it to the item later.
   # The guidance engine never names it as a found / wrong / identified item.
   hand: hand
