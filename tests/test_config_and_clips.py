@@ -49,6 +49,7 @@ def test_shipped_configs_load():
     assert s.guidance.identify_max_objects == 3
     assert d.camera.backend == "opencv"
     assert c.mode_switch.positions == {"00": "off", "11": "on", "01": "toggle"}
+    assert c.mode_switch.toggle_hold_s == 0.8
     # s.path() turns a repo-relative path from the config into an absolute one.
     assert s.path("data/x") == ROOT / "data" / "x"
 
@@ -111,6 +112,7 @@ def test_phrase_rendering_uses_spoken_names(catalog):
     assert catalog.text("found", {"item": "tomato_sauce"}) == "Tomato sauce found."
     assert catalog.text("direction", {"h": "slightly_left", "v": "eye"}) == "Slightly left. Eye level."
     assert catalog.text("item_announce", {"n": 2, "total": 5, "item": "pasta"}) == "Item 2 of 5: pasta."
+    assert catalog.text("item_marked_found", {"item": "tomato_sauce"}) == "Tomato sauce marked found."
     assert catalog.text("identified_many", {"items": ["pasta", "milk", "rice"]}) == \
         "I see pasta, milk, and rice."
     assert catalog.text("wrong_item", {"other": "pasta", "item": "tomato_sauce"}) == \

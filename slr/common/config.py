@@ -466,7 +466,7 @@ class DeviceConfig(_Rooted):
 # Every event name the rest of the program understands. Buttons, the mode switch, the volume
 # dial and sim-mode keyboard keys all produce one of these.
 EVENTS = (
-    "next_item", "prev_item", "enter", "identify", "mode_on", "mode_off",
+    "next_item", "prev_item", "enter", "identify", "toggle_found", "mode_on", "mode_off",
     "volume_set", "help", "status", "shutdown",
 )
 
@@ -493,6 +493,9 @@ class ModeSwitchConfig(_Model):
     positions: dict[str, Literal["off", "on", "toggle"]] = {"00": "off", "11": "on", "01": "toggle"}
     # True if the "toggle" position stays put; False if it springs back.
     toggle_latching: bool = False
+    # A short flick to TOGGLE marks the current item found/not found. Holding TOGGLE this
+    # long instead runs Identify, so no separate shutter button is needed.
+    toggle_hold_s: float = 0.8
 
 
 class IdentifyTriggers(_Model):
@@ -553,6 +556,8 @@ class ControlsConfig(_Rooted):
         for key in self.mode_switch.positions:
             if len(key) != 2 or set(key) - {"0", "1"}:
                 raise ValueError(f"mode_switch position key {key!r} must look like '01'")
+        if self.mode_switch.toggle_hold_s <= self.mode_switch.debounce_ms / 1000:
+            raise ValueError("mode_switch.toggle_hold_s must be longer than debounce_ms")
         return self
 
 

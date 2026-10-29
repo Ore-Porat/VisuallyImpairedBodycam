@@ -743,6 +743,16 @@ def test_mode_on_auto_starts_find_for_current_item():
     assert d.s.index == 0
 
 
+def test_mode_on_auto_does_not_guide_a_found_item():
+    """If TOGGLE marked the current item found while OFF, ON announces it but stays idle."""
+    cfg = GuidanceConfig(tones_enabled=False, auto_find_on_mode_on=True)
+    state = g.initial_state((ListItem("pasta", FOUND), ListItem("coffee")))
+    d = Driver(state=state, cfg=cfg)
+    fx = d.control("mode_on")
+    assert keys(fx) == ["item_announce_found"]
+    assert d.s.mode == Mode.IDLE and d.s.target is None
+
+
 def test_mode_on_auto_with_empty_list_stays_idle():
     """ON with no list items explains why there is nothing to search for."""
     cfg = GuidanceConfig(tones_enabled=False, auto_find_on_mode_on=True)
@@ -760,6 +770,18 @@ def test_browsing_with_auto_find_keeps_guiding():
     assert keys(fx) == ["item_announce"]
     assert d.s.mode == Mode.SEARCHING and d.s.target == "coffee"
     assert Stream(on=True, purpose="find") in fx
+
+
+def test_browsing_to_a_found_item_does_not_start_a_search():
+    """Next/prev announces an already-found item but does not guide it again."""
+    cfg = GuidanceConfig(tones_enabled=False, auto_find_on_mode_on=True)
+    state = replace(g.initial_state((ListItem("pasta"), ListItem("coffee", FOUND))),
+                    mode=Mode.IDLE)
+    d = Driver(state=state, cfg=cfg)
+    fx = d.control("next_item")
+    assert keys(fx) == ["item_announce_found"]
+    assert d.s.mode == Mode.IDLE and d.s.target is None
+    assert Stream(on=True, purpose="find") not in fx
 
 
 def test_check_off_with_auto_find_continues_to_next_item():
@@ -824,13 +846,71 @@ def test_identify_from_idle_restarts_idle_stream_when_enabled():
     assert Stream(on=True, purpose="find") in fx
 
 
-def test_only_mode_switch_works_in_standby():
-    """In STANDBY other buttons are ignored silently; the switch is the only way out."""
+def test_standby_ignores_normal_buttons():
+    """In STANDBY normal buttons are ignored silently; only the switch and list commands work."""
     d = Driver(state=g.initial_state(items("pasta")))
-    for ev in ("enter", "next_item", "identify", "help"):
+    for ev in ("enter", "next_item", "help", "status"):
         fx = d.control(ev)
         assert keys(fx) == []
         assert d.s.mode == Mode.STANDBY
+
+
+def test_toggle_found_works_in_standby_and_keeps_the_same_item():
+    """A short TOGGLE corrects the list even while OFF, and toggling again flips it back."""
+    d = Driver(state=g.initial_state(items("pasta", "coffee")))
+    fx = d.control("toggle_found")
+    assert keys(fx) == ["item_marked_found"]
+    assert d.s.mode == Mode.STANDBY
+    assert d.s.items[0].status == FOUND and d.s.index == 0
+    fx = d.control("toggle_found")
+    assert keys(fx) == ["item_marked_pending"]
+    assert d.s.items[0].status == PENDING and d.s.index == 0
+
+
+def test_toggle_found_with_empty_list_says_so():
+    """TOGGLE with no current item cannot mark anything."""
+    d = Driver(state=g.initial_state(()))
+    assert keys(d.control("toggle_found")) == ["list_empty"]
+
+
+def test_toggle_found_stops_an_active_search():
+    """Marking the item found while guiding cancels the search instead of guiding a found item."""
+    cfg = GuidanceConfig(tones_enabled=False, auto_find_on_mode_on=True)
+    d = guiding_driver(cfg=cfg)
+    fx = d.control("toggle_found")
+    assert keys(fx) == ["item_marked_found"]
+    assert d.s.items[0].status == FOUND
+    assert d.s.mode == Mode.IDLE and d.s.target is None
+    assert d.s.index == 0
+
+
+def test_toggle_pending_restarts_search_when_on():
+    """If a found current item is toggled back to pending while ON, guidance resumes."""
+    cfg = GuidanceConfig(tones_enabled=False, auto_find_on_mode_on=True)
+    state = replace(g.initial_state((ListItem("pasta", FOUND), ListItem("coffee"))),
+                    mode=Mode.IDLE)
+    d = Driver(state=state, cfg=cfg)
+    fx = d.control("toggle_found")
+    assert keys(fx) == ["item_marked_pending"]
+    assert d.s.items[0].status == PENDING
+    assert d.s.mode == Mode.SEARCHING and d.s.target == "pasta"
+    assert Stream(on=True, purpose="find") in fx
+
+
+def test_identify_works_in_standby_and_returns_to_standby():
+    """Holding TOGGLE in OFF identifies and then goes back to silent monitor mode."""
+    cfg = GuidanceConfig(tones_enabled=False, stream_in_off=False)
+    d = Driver(state=g.initial_state(items("pasta")), cfg=cfg)
+    fx = d.control("identify")
+    assert keys(fx) == ["identifying"]
+    assert d.s.mode == Mode.IDENTIFYING
+    burst = d.s.identify.burst_id
+    out = []
+    for _ in range(cfg.identify_burst):
+        out += d.send(frame(det("coffee"), purpose="identify", burst_id=burst), 0.1)
+    assert keys(out) == ["identified"]
+    assert d.s.mode == Mode.STANDBY
+    assert Stream(on=False) in out
 
 
 def test_frames_ignored_when_not_searching():

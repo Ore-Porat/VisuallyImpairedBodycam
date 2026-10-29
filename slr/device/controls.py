@@ -4,7 +4,8 @@ WHAT THIS FILE DOES
 -------------------
 The camera body has three buttons (shutter release, film advance lever, rewind knob) and a
 three-position mode switch. This file turns their raw electrical readings into named EVENTS
-such as "enter", "next_item", "identify", "help", "mode_on" or "shutdown". The rest of the
+such as "enter", "next_item", "identify", "toggle_found", "help", "mode_on" or "shutdown".
+The rest of the
 device never sees pins or voltages, only event names. (FR-40..43 are requirement numbers from
 the product spec, PRD.pdf.)
 
@@ -218,6 +219,14 @@ class ModeSwitchDecoder:
         self.candidate_since = 0.0           # since when
         self.invalid_count = 0
         self._last_invalid_logged = -1.0
+        # TOGGLE is both a button and a momentary switch position:
+        #   short flick -> toggle_found
+        #   held >= toggle_hold_s -> identify
+        # We remember when TOGGLE was entered so we can decide on release.
+        self.toggle_since: float | None = None
+        self.toggle_origin: str | None = None   # position we came from (on/off)
+        self.toggle_found_sent = False
+        self.toggle_identify_sent = False
 
     def decode(self, a: int, b: int) -> str | None:
         """Translate the two wire readings into a position name, or None if the code is unknown."""
@@ -239,28 +248,81 @@ class ModeSwitchDecoder:
         # A new candidate position: start its stability timer.
         if pos != self.candidate:
             self.candidate, self.candidate_since = pos, t
-        # Nothing to do if unchanged, or if it has not been steady for long enough yet.
-        if pos == self.position or t - self.candidate_since < self.debounce:
+        # If the position has not changed, the only possible event is "held TOGGLE".
+        if pos == self.position:
+            return self._toggle_hold(t, pos)
+        # Not steady long enough yet.
+        if t - self.candidate_since < self.debounce:
             return []
         prev, self.position = self.position, pos
-        # First position after boot: report it plainly.
+        # First position after boot: report it plainly. A boot in TOGGLE waits for release so
+        # it does not accidentally toggle a shopping-list item at power-on.
         if prev is None:
+            if pos == "toggle":
+                self._begin_toggle(None, t)
+                # Do not turn a switch held at power-on into a list edit or Identify.
+                self.toggle_found_sent = True
+                self.toggle_identify_sent = True
+                return []
             return ["mode_off"] if pos == "off" else ["mode_on"]
+        # Entering TOGGLE: wait to see whether it is a short flick or a hold.
+        if pos == "toggle":
+            return self._enter_toggle(prev, t)
+        # Leaving TOGGLE: a short flick means "toggle the current item".
+        if prev == "toggle":
+            return self._leave_toggle(pos)
         return self._transition(prev, pos)
 
+    def _begin_toggle(self, origin: str | None, t: float) -> None:
+        """Start measuring how long TOGGLE is held."""
+        self.toggle_since = t
+        self.toggle_origin = origin
+        self.toggle_found_sent = False
+        self.toggle_identify_sent = False
+
+    def _enter_toggle(self, origin: str, t: float) -> list[str]:
+        """TOGGLE was just accepted. A latching switch is a found-toggle immediately; a
+        spring-loaded one waits for release so a hold can become Identify."""
+        self._begin_toggle(origin, t)
+        if self.cfg.toggle_latching:
+            self.toggle_found_sent = True
+            return ["toggle_found"]
+        return []
+
+    def _toggle_hold(self, t: float, pos: str) -> list[str]:
+        """While TOGGLE is held, emit Identify once after ``toggle_hold_s``."""
+        if (pos != "toggle" or self.toggle_since is None or self.cfg.toggle_latching
+                or self.toggle_identify_sent or not self.triggers.mode_toggle):
+            return []
+        if t - self.toggle_since < self.cfg.toggle_hold_s:
+            return []
+        self.toggle_identify_sent = True
+        self.toggle_found_sent = True   # a hold is Identify, not a found-toggle
+        return ["identify"]
+
+    def _leave_toggle(self, pos: str) -> list[str]:
+        """TOGGLE returned to a normal position: short flick -> toggle_found."""
+        out: list[str] = []
+        if not self.toggle_found_sent:
+            out.append("toggle_found")
+            self.toggle_found_sent = True
+        origin = self.toggle_origin
+        # Springing back to where it came from is not a mode change. This also stops an
+        # OFF -> TOGGLE -> OFF flick from briefly turning the device on and off.
+        if origin is None or pos != origin:
+            out += self._transition("toggle", pos)
+        self.toggle_since = None
+        self.toggle_origin = None
+        self.toggle_identify_sent = False
+        return out
+
     def _transition(self, prev: str, pos: str) -> list[str]:
-        """Events for moving from position ``prev`` to ``pos``."""
+        """Events for moving between normal positions ``prev`` and ``pos``."""
         if pos == "off":
             return ["mode_off"]
         if pos == "on":
             return ["mode_on"]  # the server ignores this if it is already active
-        # toggle
-        # Flicking to TOGGLE from OFF also turns the device on; and (if configured) TOGGLE
-        # triggers an "identify" (what am I holding?).
-        out = ["mode_on"] if prev == "off" else []
-        if self.triggers.mode_toggle:
-            out.append("identify")
-        return out
+        return []  # TOGGLE is handled in update()
 
     def current_events(self) -> list[str]:
         """Events that describe the current position (sent again after every reconnect)."""

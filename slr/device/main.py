@@ -277,7 +277,7 @@ class DeviceApp:
         # no ``switch``, so this yields None there.
         position = getattr(getattr(self.controls, "switch", None), "position", None)
         if self.ccfg.mode_switch.toggle_latching and position == "toggle" \
-                and event not in ("mode_on", "mode_off", "identify"):
+                and event not in ("mode_on", "mode_off", "identify", "toggle_found"):
             return  # FR-43: latched in TOGGLE, the device waits until the switch goes back to ON
         if not self.client.connected.is_set():
             if event != "mode_off":

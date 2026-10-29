@@ -6,8 +6,8 @@
 #   volume buttons, all wired to the Raspberry Pi's GPIO pins. This file says which pin each
 #   control is on, how long a press must last to count as "short", "long" or "hold", and
 #   which event each press produces. Events are the words the rest of the software
-#   understands: enter, next_item, prev_item, identify, help, status, mode_on, mode_off,
-#   shutdown.
+#   understands: enter, next_item, prev_item, identify, toggle_found, help, status, mode_on,
+#   mode_off, shutdown.
 #
 # Who reads it
 #   The device program on the Pi (slr/device/controls.py). In sim mode on a laptop the
@@ -64,10 +64,11 @@ mode_switch:
     "11": "on"
     "01": "toggle"
   toggle_latching: false # FR-43: set true if TOGGLE stays put instead of springing back
+  toggle_hold_s: 0.8     # hold TOGGLE this long for Identify; a short flick toggles found
 
 # Which actions start Identify mode ("what am I holding?"). Both can be on at once.
 identify_triggers:
-  mode_toggle: true           # flicking the mode switch to TOGGLE
+  mode_toggle: true           # holding TOGGLE for toggle_hold_s
   shutter_long_press: true    # holding the shutter for long_press_s
 
 # FR-46: used only if the MCP3002 volume dial can't be read at startup
@@ -83,6 +84,7 @@ keyboard:
   prev_item: [left, p]
   enter: [space]
   identify: [i]
+  toggle_found: [t]
   mode_on: [o]
   mode_off: [x]
   volume_up: ["+", "="]

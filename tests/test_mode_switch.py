@@ -8,9 +8,9 @@ What is being tested here?
     The camera's mode switch is a three-position lever wired to two GPIO pins, a and b.
     Each pin reads 0 or 1, so the pair forms a two-character code ("00", "11", "01").
     config/controls.yaml maps those codes to positions: OFF, ON and TOGGLE (a
-    spring-loaded position used to trigger Identify). ``ModeSwitchDecoder`` (in
-    ``slr/device/controls.py``) turns a stream of pin readings into events:
-    "mode_on", "mode_off" and "identify". It must also ignore contact flicker
+    spring-loaded position). ``ModeSwitchDecoder`` (in ``slr/device/controls.py``) turns
+    a stream of pin readings into events: "mode_on", "mode_off", "toggle_found" for a short
+    TOGGLE flick, and "identify" when TOGGLE is held. It must also ignore contact flicker
     (debounce, 80 ms) and the brief "10" state seen while the lever moves between
     positions. FR-42 and FR-43 are requirement numbers from the product spec, PRD.pdf.
 
@@ -108,30 +108,76 @@ def test_invalid_state_mid_movement_does_not_break_transition():
     assert events == ["mode_off"]
 
 
-def test_on_to_toggle_identifies_and_back_resumes():
-    """ON -> TOGGLE fires 'identify'; springing back to ON fires 'mode_on' (resume)."""
+def test_on_toggle_short_flick_toggles_found_and_back_resumes():
+    """ON -> TOGGLE short flick toggles the item; springing back to ON is not a new mode."""
     dec = make()
     settle(dec, 1, 1, 0.0)
-    out, t = settle(dec, 0, 1, 1.0)
+    out, t = settle(dec, 0, 1, 1.0, dur=0.2)
+    assert out == []  # the decoder waits to see whether this is a flick or a hold
+    out, _ = settle(dec, 1, 1, t)
+    assert out == ["toggle_found"]  # no mode_on: the switch is just springing back
+
+
+def test_off_toggle_short_flick_does_not_turn_the_device_on():
+    """OFF -> TOGGLE is a list command, not a mode change."""
+    dec = make()
+    settle(dec, 0, 0, 0.0)
+    out, t = settle(dec, 0, 1, 1.0, dur=0.2)
+    assert out == []
+    out, _ = settle(dec, 0, 0, t)
+    assert out == ["toggle_found"]  # no mode_on, no mode_off
+
+
+def test_toggle_hold_identifies_once():
+    """Holding TOGGLE for toggle_hold_s runs Identify; releasing does not toggle found."""
+    dec = make()
+    settle(dec, 1, 1, 0.0)
+    out, t = settle(dec, 0, 1, 1.0, dur=0.2)
+    assert out == []
+    out, t = settle(dec, 0, 1, t, dur=0.8)
     assert out == ["identify"]
+    out, t = settle(dec, 0, 1, t, dur=0.5)
+    assert out == []  # only once per hold
+    out, _ = settle(dec, 1, 1, t)
+    assert out == []
+
+
+def test_toggle_hold_from_off_identifies_without_turning_on():
+    """Holding TOGGLE while OFF runs Identify but does not switch the device ON."""
+    dec = make()
+    settle(dec, 0, 0, 0.0)
+    out, t = settle(dec, 0, 1, 1.0, dur=1.0)
+    assert out == ["identify"]
+    out, _ = settle(dec, 0, 0, t)
+    assert out == []
+
+
+def test_toggle_hold_identify_can_be_disabled():
+    """With identify_triggers.mode_toggle off, a hold is ignored but a flick still works."""
+    dec = make(triggers=IdentifyTriggers(mode_toggle=False))
+    settle(dec, 1, 1, 0.0)
+    out, t = settle(dec, 0, 1, 1.0, dur=0.2)
+    out += settle(dec, 0, 1, t, dur=1.0)[0]
+    assert out == []
+    out, _ = settle(dec, 1, 1, t)
+    assert out == ["toggle_found"]
+
+
+def test_boot_in_toggle_does_not_toggle_found():
+    """A switch held in TOGGLE at power-on must not edit the list by accident."""
+    dec = make()
+    out, t = settle(dec, 0, 1, 0.0)
+    assert out == []
     out, _ = settle(dec, 1, 1, t)
     assert out == ["mode_on"]
 
 
-def test_off_to_toggle_turns_on_first():
-    """OFF -> TOGGLE (skipping ON) turns the device on and then identifies."""
-    dec = make()
-    settle(dec, 0, 0, 0.0)
-    out, _ = settle(dec, 0, 1, 1.0)
-    assert out == ["mode_on", "identify"]
-
-
-def test_toggle_trigger_can_be_disabled():
-    """With identify_triggers.mode_toggle off, TOGGLE does nothing."""
-    dec = make(triggers=IdentifyTriggers(mode_toggle=False))
+def test_latching_toggle_toggles_found_on_entry():
+    """A latching TOGGLE has no release gesture, so it toggles found immediately."""
+    dec = make(toggle_latching=True)
     settle(dec, 1, 1, 0.0)
     out, _ = settle(dec, 0, 1, 1.0)
-    assert out == []
+    assert out == ["toggle_found"]
 
 
 def test_current_events_for_reconnect():

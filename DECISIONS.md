@@ -28,11 +28,13 @@ Choices made where the PRD (`PRD.pdf`) was ambiguous or left room (PRD rule 7). 
 - "Not seeing X" timer counts from the search start or the last raw sighting of the target.
 - Wrong-item warning (FR-20) also requires the other item to be stable (k of n frames), not just one frame: precision first. Off by default it would hide a real feature, so it's on, rate limited to every 5 s.
 - Identify: per frame the pick maximizes `conf - 0.5 * distance_from_center`. A class gets one vote per frame; classes above `identify_min_votes` are reported, up to `identify_max_objects` (shipped: 3). One object keeps the old "This is X" wording; several use "I see X, Y, and Z." A tie for the single-object answer is "Not sure". With fewer than 3 frames in 1.5 s it says "Not sure." (FR-32).
-- Controls other than the mode switch are ignored during the ~1 s identify burst.
+- All controls are ignored during the ~1 s identify burst, so a second flick cannot toggle an item mid-answer.
 - next/prev during a search stops the search and announces the new item. With `auto_find_on_mode_on`, it then starts searching for that item.
 - Enter on an already-found item still starts a search (the user chose it explicitly).
-- OFF is a silent monitor with `stream_in_off: true`: the camera and detector keep running (so the debug view shows boxes), but the engine stays in STANDBY and emits no guidance speech or tones. Non-switch controls are ignored silently; local volume/startup/connection clips still play.
-- `mode_on` with `auto_find_on_mode_on: true` starts a Find for the current list item immediately ("Searching for X."). If the list is empty it says so and stays IDLE. Enter still stops the search; next/prev and check-off continue guiding to the next item.
+- A short flick to TOGGLE flips the current item between found and not found, speaks "X marked found." or "X marked not found.", and keeps the same item selected so a second flick reverses it. It works in OFF and ON. If a search is running for that item, marking it found stops the search; marking it pending again restarts the search when ON.
+- Holding TOGGLE for `mode_switch.toggle_hold_s` runs Identify instead, so no shutter button is required. The same hold works from OFF and returns to OFF afterwards.
+- OFF is a silent monitor with `stream_in_off: true`: the camera and detector keep running (so the debug view shows boxes), but the engine stays in STANDBY and emits no guidance speech or tones. Normal controls are ignored silently. The explicit TOGGLE found/not-found command and held-TOGGLE Identify still speak; local volume/startup/connection clips still play.
+- `mode_on` with `auto_find_on_mode_on: true` starts a Find for the current list item immediately ("Searching for X."). If the list is empty it says so and stays IDLE; if the current item is already found it announces that and waits, so OFF-toggled items are not guided. Enter still starts a search for a found item on purpose; next/prev and check-off continue guiding to pending items.
 - Within-reach exits back to guiding only when the box drops below `reach_h * 0.8` or leaves the straight-ahead zone, to avoid flicker.
 - "Getting closer" (FR-22, P2) is implemented but off by default.
 - On device disconnect the server quietly goes to STANDBY; the device re-sends its switch position on reconnect. With the switch ON, the server restarts a search for the current item.
@@ -54,8 +56,8 @@ Choices made where the PRD (`PRD.pdf`) was ambiguous or left room (PRD rule 7). 
 - The shutdown combo suppresses both buttons' own actions as soon as both are down.
 - "Hysteresis of half a step" for the volume dial means a total band of half a step: the level changes once the dial is a quarter step past the boundary.
 - Volume log curve (FR-44): `p = A + B ln(x + C)` fitted exactly through the three calibration points (mirrored when the curve bends the other way); if the points are exactly linear it falls back to piecewise.
-- Mode switch: OFF -> TOGGLE directly sends `mode_on` then `identify`. TOGGLE -> ON sends `mode_on`, which the server ignores while active.
-- FR-43 latching TOGGLE: with `toggle_latching: true` the device ignores buttons (except shutdown) while the switch sits in TOGGLE.
+- Mode switch: a short ON -> TOGGLE -> ON flick sends only `toggle_found`; springing back is not a mode change. Holding TOGGLE sends `identify` once after `toggle_hold_s` and suppresses the found-toggle. OFF -> TOGGLE is also only a command: it does not turn the device on.
+- FR-43 latching TOGGLE: with `toggle_latching: true` the switch has no release gesture, so it sends `toggle_found` on entry and a held TOGGLE does not start Identify (use the shutter long press).
 - First-run tutorial (FR-57): the device sends `help` on its first connection and stores a flag in `data/device_state/first_run_done`.
 - Default pins (BCM): shutter 17, advance 27, rewind 22, switch a 5 / b 6, fallback volume buttons 23 / 24. These avoid SPI0 (7-11, MCP3002) and I2S (18-21).
 - The volume ADC is an MCP3002 (10-bit, two channels), read with its two-byte SPI command (`0x68` for CH0, `0x78` for CH1). Its VDD is also the reference, so VDD must be 3.3 V.

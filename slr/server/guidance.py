@@ -27,7 +27,8 @@ some "effects" (speech, beeps, camera on/off) are produced along the way.
 The modes (squares):
 
 - STANDBY       The mode switch on the camera body is OFF. With ``stream_in_off`` the camera
-                and detector keep running as a silent monitor, but no guidance is spoken.
+                and detector keep running as a silent monitor. Only explicit list edits
+                (``toggle_found``) and Identify speak.
 - IDLE          Switched on, waiting. The shopper can browse the list, press Enter to search,
                 or press Identify.
 - SEARCHING     Camera is streaming, looking for the current list item. Nothing found yet.
@@ -135,7 +136,8 @@ HAND_DIRS = ("hand_left", "hand_right", "hand_up", "hand_down", "hand_up_left", 
 class Control:
     """A button, switch or dial event from the device.
 
-    event: the name, e.g. "enter", "next_item", "identify", "mode_on", "volume_set".
+    event: the name, e.g. "enter", "next_item", "identify", "toggle_found", "mode_on",
+           "volume_set".
     value: optional number that goes with it (only used for "volume_set").
     """
 
@@ -678,6 +680,16 @@ def _on_control(s: State, ev: Control, now: float, cfg: GuidanceConfig) -> tuple
         # The device says "Shutting down" from a local clip and powers off by itself.
         s, fx = _leave_find(s, cfg)
         return replace(s, mode=Mode.STANDBY), fx
+    if e == "toggle_found":
+        # The TOGGLE position is a list-edit command, so it works in OFF and ON alike.
+        if s.mode == Mode.IDENTIFYING:
+            return s, []  # let the ~1 s identify burst finish
+        return _toggle_current_item(s, now, cfg)
+    if e == "identify":
+        # Holding TOGGLE (or the shutter) works even in OFF; it returns to the same mode.
+        if s.mode == Mode.IDENTIFYING:
+            return s, []
+        return _start_identify(s, now, cfg)
     if e == "mode_off":
         # Mode switch OFF: silent monitor. Keep the camera/inference running if configured,
         # but produce no guidance speech or tones.
@@ -694,7 +706,15 @@ def _on_control(s: State, ev: Control, now: float, cfg: GuidanceConfig) -> tuple
                     if cfg.stream_in_idle:
                         fx.append(Stream(on=True, purpose="find"))
                     return replace(s, mode=Mode.IDLE), fx
-                target = s.items[s.index].name
+                item = s.items[s.index]
+                if item.status == FOUND:
+                    # A short TOGGLE may have marked this item found while OFF. Do not guide a
+                    # found item; announce it and wait for next/prev or another TOGGLE.
+                    fx = [_announce_item(s)]
+                    if cfg.stream_in_idle:
+                        fx.append(Stream(on=True, purpose="find"))
+                    return replace(s, mode=Mode.IDLE), fx
+                target = item.name
                 s = _start_search(s, target, now, cfg)
                 return s, [say("searching", interrupt=True, item=target),
                            Stream(on=True, purpose="find")]
@@ -718,13 +738,16 @@ def _on_control(s: State, ev: Control, now: float, cfg: GuidanceConfig) -> tuple
         # Browse the list. Cancels any running search first.
         if not s.items:
             return s, [say("list_empty", interrupt=True)]
-        s, fx = _leave_find(s, cfg, keep_stream=cfg.stream_in_idle or cfg.auto_find_on_mode_on)
         step_by = 1 if e == "next_item" else -1
         # ``%`` wraps around: after the last item comes the first one again.
-        s = replace(s, mode=Mode.IDLE, index=(s.index + step_by) % len(s.items))
+        new_index = (s.index + step_by) % len(s.items)
+        # ON keeps guiding, but never starts a search for an item already marked found.
+        will_search = (cfg.auto_find_on_mode_on
+                       and s.items[new_index].status == PENDING)
+        s, fx = _leave_find(s, cfg, keep_stream=cfg.stream_in_idle or will_search)
+        s = replace(s, mode=Mode.IDLE, index=new_index)
         fx.append(_announce_item(s))
-        if cfg.auto_find_on_mode_on:
-            # ON keeps guiding: start searching for the newly selected item after announcing it.
+        if will_search:
             target = s.items[s.index].name
             s = _start_search(s, target, now, cfg)
             if not any(isinstance(effect, Stream) and effect.on for effect in fx):
@@ -800,6 +823,40 @@ def _check_off(s: State, cfg: GuidanceConfig, now: float) -> tuple[State, list[E
     return s, fx + [say("checked_off_next", interrupt=True, item=target, next=items[nxt].name)]
 
 
+def _toggle_current_item(s: State, now: float, cfg: GuidanceConfig) -> tuple[State, list[Effect]]:
+    """Flip the current item between PENDING and FOUND, keeping the same item selected.
+
+    This works in every mode, including STANDBY, so the switch can correct the list even
+    while the device is otherwise silent. If a search is active for this item, marking it
+    found stops that search; marking it pending again starts a new search when ON.
+    """
+    if not s.items:
+        return s, [say("list_empty", interrupt=True)]
+
+    item = s.items[s.index]
+    marking_found = item.status == PENDING
+    items = tuple(replace(it, status=FOUND if marking_found else PENDING)
+                  if i == s.index else it for i, it in enumerate(s.items))
+
+    fx: list[Effect] = []
+    if s.mode in FIND_MODES:
+        # Stop guiding a found item; keep the monitor stream if ON is configured that way.
+        # If we are about to restart for a now-pending item, keep it running to avoid a blip.
+        restarting = not marking_found and cfg.auto_find_on_mode_on
+        s, fx = _leave_find(s, cfg, keep_stream=cfg.stream_in_idle or restarting)
+        s = replace(s, mode=Mode.IDLE)
+    s = replace(s, items=items)
+    key = "item_marked_found" if marking_found else "item_marked_pending"
+    fx.append(say(key, interrupt=True, item=item.name))
+
+    # ON means "guide the current item". If the user just restored it to pending, start again.
+    if not marking_found and cfg.auto_find_on_mode_on and s.mode == Mode.IDLE:
+        s = _start_search(s, item.name, now, cfg)
+        if not any(isinstance(effect, Stream) and effect.on for effect in fx):
+            fx.append(Stream(on=True, purpose="find"))
+    return s, fx
+
+
 def _start_identify(s: State, now: float, cfg: GuidanceConfig) -> tuple[State, list[Effect]]:
     """Begin an Identify burst: remember where to return, ask the device for N frames."""
     resume = s.mode
@@ -844,7 +901,8 @@ def _finish_identify(s: State, now: float, cfg: GuidanceConfig) -> tuple[State, 
         return s, [cue, Stream(on=True, purpose="find")]
     s = replace(s, mode=Mode.IDLE if ident.resume != Mode.STANDBY else Mode.STANDBY,
                 identify=None, target=None)
-    keep_stream = cfg.stream_in_idle and s.mode == Mode.IDLE
+    keep_stream = ((s.mode == Mode.IDLE and cfg.stream_in_idle)
+                   or (s.mode == Mode.STANDBY and cfg.stream_in_off))
     return s, [cue, Stream(on=True, purpose="find") if keep_stream else Stream(on=False)]
 
 

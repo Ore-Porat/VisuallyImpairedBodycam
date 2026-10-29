@@ -189,7 +189,8 @@ class PhraseCatalog:
         targets = list(self.classes) if all_classes else names
         for c in targets:
             for key in ("found", "searching", "not_seeing", "within_reach", "identified",
-                        "identified_on_list", "checked_off_done"):
+                        "identified_on_list", "checked_off_done", "item_marked_found",
+                        "item_marked_pending"):
                 cues.append(Say(key, {"item": c}))
         # List-position phrases depend on the exact list, so only for the current items.
         total = len(items)
