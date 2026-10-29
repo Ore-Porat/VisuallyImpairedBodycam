@@ -31,6 +31,16 @@ directions:
   high: High shelf
   eye: Eye level
   low: Low shelf
+  # Words substituted for {hd}: which way the HAND must move to land on the item.
+  hand_left: Hand left
+  hand_right: Hand right
+  hand_up: Hand up
+  hand_down: Hand down
+  hand_up_left: Hand up and left
+  hand_up_right: Hand up and right
+  hand_down_left: Hand down and left
+  hand_down_right: Hand down and right
+  hand_forward: Reach forward
 
 # Phrases spoken by the laptop server during normal use. key: {priority, text}.
 phrases:
@@ -50,6 +60,8 @@ phrases:
   direction:           {priority: guidance, text: "{h}. {v}."}
   direction_h:         {priority: guidance, text: "{h}."}
   within_reach:        {priority: confirmation, text: "Within reach. {item} straight ahead."}
+  hand_dir:            {priority: guidance, text: "{hd}."}
+  hand_on_item:        {priority: confirmation, text: "That's it."}
   checked_off_next:    {priority: confirmation, text: "{item} checked off. Next: {next}."}
   checked_off_done:    {priority: confirmation, text: "{item} checked off. That was the last item on your list."}
   lost:                {priority: confirmation, text: "Lost it."}

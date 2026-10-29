@@ -869,3 +869,59 @@ def test_wrong_item_ignores_the_hand():
     d = searching_driver()
     fx = d.frames(6, det("rice", 0.95, cx=0.5, cy=0.5))
     assert "wrong_item" in keys(fx)
+
+
+# --------------------------------------------------------------------------- hand guidance
+
+
+def test_hand_cues_steer_the_hand_toward_the_item_within_reach():
+    d = within_reach_driver()
+    item = det(cx=0.5, h=0.4)
+    hand = det("hand", 0.9, cx=0.2, cy=0.8, w=0.15, h=0.15)   # below left of the item
+    fx = d.frames(1, item, hand, dt=0.1)
+    assert Say("hand_dir", {"hd": "hand_up_right"}) in fx
+    # The same cue is not repeated right away...
+    fx = d.frames(1, item, hand, dt=0.1)
+    assert "hand_dir" not in keys(fx)
+    # ...but a changed one is, and it repeats after hand_repeat_s.
+    fx = d.frames(1, item, det("hand", 0.9, cx=0.5, cy=0.8, w=0.15, h=0.15), dt=0.1)
+    assert Say("hand_dir", {"hd": "hand_up"}) in fx
+    fx = d.frames(1, item, det("hand", 0.9, cx=0.5, cy=0.8, w=0.15, h=0.15), dt=1.6)
+    assert Say("hand_dir", {"hd": "hand_up"}) in fx
+    assert d.s.mode == Mode.WITHIN_REACH
+
+
+def test_hand_covering_the_item_says_thats_it_and_checks_it_off():
+    d = within_reach_driver()
+    item = det(cx=0.5, h=0.4)
+    hand = det("hand", 0.9, cx=0.5, cy=0.55, w=0.2, h=0.2)    # on the item
+    fx = d.frames(5, item, hand, dt=0.1)                      # held 0.4 s: not yet
+    assert "hand_on_item" not in keys(fx)
+    fx = d.frames(1, item, hand, dt=0.1)                      # held 0.5 s
+    assert "hand_on_item" in keys(fx)
+    assert "checked_off_next" in keys(fx)
+    assert d.s.mode == Mode.IDLE and d.s.items[0].status == FOUND and d.s.index == 1
+    assert Stream(on=False) in fx
+
+
+def test_hand_guidance_needs_a_hand_and_can_be_disabled():
+    d = within_reach_driver()
+    fx = d.frames(3, det(cx=0.5, h=0.4), dt=0.1)              # no hand in view
+    assert "hand_dir" not in keys(fx)
+    fx = d.frames(3, det(cx=0.5, h=0.4), det("hand", 0.3, cx=0.2, cy=0.8), dt=0.1)   # weak hand
+    assert "hand_dir" not in keys(fx)
+    d = within_reach_driver(cfg=GuidanceConfig(tones_enabled=False, hand_guidance_enabled=False))
+    fx = d.frames(3, det(cx=0.5, h=0.4), det("hand", 0.9, cx=0.2, cy=0.8), dt=0.1)
+    assert "hand_dir" not in keys(fx)
+    assert d.s.mode == Mode.WITHIN_REACH
+
+
+def test_hand_direction_words():
+    cfg = GuidanceConfig()
+    item = det(cx=0.5, cy=0.5)
+    assert g.hand_direction(det("hand", cx=0.5, cy=0.5), item, cfg) == "hand_forward"
+    assert g.hand_direction(det("hand", cx=0.8, cy=0.5), item, cfg) == "hand_left"
+    assert g.hand_direction(det("hand", cx=0.5, cy=0.2), item, cfg) == "hand_down"
+    assert g.hand_direction(det("hand", cx=0.2, cy=0.9), item, cfg) == "hand_up_right"
+    assert g.hand_direction(det("hand", cx=0.8, cy=0.5), item,
+                            GuidanceConfig(flip_horizontal=True)) == "hand_right"

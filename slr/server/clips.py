@@ -59,7 +59,7 @@ import numpy as np
 from slr.common.config import ConfigError, ServerConfig, TTSConfig, read_yaml
 from slr.common.protocol import PRIORITIES, manifest_hash
 from slr.common.types import ListItem
-from slr.server.guidance import H_DIRS, V_ZONES, Say
+from slr.server.guidance import H_DIRS, HAND_DIRS, V_ZONES, Say
 
 log = logging.getLogger(__name__)
 
@@ -169,6 +169,9 @@ class PhraseCatalog:
             cues.append(Say("direction_h", {"h": h}))
             for v in V_ZONES:
                 cues.append(Say("direction", {"h": h, "v": v}))
+        # Hand cues ("Hand left.", "Reach forward.").
+        for hd in HAND_DIRS:
+            cues.append(Say("hand_dir", {"hd": hd}))
         # Per-item phrases for each class (or just the items on the list).
         targets = list(self.classes) if all_classes else names
         for c in targets:

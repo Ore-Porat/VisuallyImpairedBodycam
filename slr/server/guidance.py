@@ -121,6 +121,9 @@ H_DIRS = {(0, -1): "straight", (0, 1): "straight", (1, -1): "slightly_left",
 H_LEVEL = {"straight": 0, "slightly_left": 1, "slightly_right": 1, "left": 2, "right": 2}
 # Vertical zones from top of frame to bottom: high shelf, eye level, low shelf.
 V_ZONES = ("high", "eye", "low")
+# Hand cue words: the way the HAND must move to land on the item (the {hd} placeholder).
+HAND_DIRS = ("hand_left", "hand_right", "hand_up", "hand_down", "hand_up_left", "hand_up_right",
+             "hand_down_left", "hand_down_right", "hand_forward")
 
 
 # --------------------------------------------------------------------------- events
@@ -248,6 +251,8 @@ class Tracking:
                      when it changes noticeably.
     closer_ref_h:    reference box height for the "getting closer" cue.
     closer_said_at:  when we last said "getting closer".
+    hand_said / hand_said_at: the hand cue we last spoke and when (within reach only).
+    hand_touch_since: when the hand first covered the item (must hold for a moment).
     """
 
     history: tuple[Detection | None, ...] = ()
@@ -262,6 +267,9 @@ class Tracking:
     tone: tuple[float, int] | None = None
     closer_ref_h: float | None = None
     closer_said_at: float | None = None
+    hand_said: str | None = None
+    hand_said_at: float | None = None
+    hand_touch_since: float | None = None
 
 
 @dataclass(frozen=True)
@@ -403,6 +411,40 @@ def classify_vertical(cy: float, prev: str | None, cfg: GuidanceConfig) -> str:
 
     prev_idx = V_ZONES.index(prev) if prev else None
     return V_ZONES[_zone_with_hysteresis(zone, cy, prev_idx, cfg.direction_hysteresis)]
+
+
+def pick_hand(dets: tuple[Detection, ...], cfg: GuidanceConfig) -> Detection | None:
+    """The most confident hand box in the frame, or None if no confident hand is visible."""
+    hands = [d for d in dets if d.cls == cfg.hand_class and d.conf >= cfg.hand_conf]
+    return max(hands, key=lambda d: d.conf) if hands else None
+
+
+def hand_on_item(hand: Detection, item: Detection, cfg: GuidanceConfig) -> bool:
+    """True when the hand covers the item: its center is inside the item box, or at least
+    ``hand_touch_overlap`` of the hand box overlaps the item box."""
+    ix = max(0.0, min(hand.x2, item.x2) - max(hand.x1, item.x1))
+    iy = max(0.0, min(hand.y2, item.y2) - max(hand.y1, item.y1))
+    area = hand.w * hand.h
+    if area <= 0:
+        return False
+    inside = item.x1 <= hand.cx <= item.x2 and item.y1 <= hand.cy <= item.y2
+    return inside or (ix * iy) / area >= cfg.hand_touch_overlap
+
+
+def hand_direction(hand: Detection, item: Detection, cfg: GuidanceConfig) -> str:
+    """Which way the hand must move to reach the item: one of ``HAND_DIRS``.
+
+    Compares the two box centers (after the camera corrections). An axis closer than
+    ``hand_cue_tol`` counts as aligned; aligned on both axes gives "hand_forward".
+    """
+    hx, hy = adjusted_center(hand, cfg)
+    ix, iy = adjusted_center(item, cfg)
+    dx, dy = ix - hx, iy - hy
+    h = "" if abs(dx) < cfg.hand_cue_tol else ("right" if dx > 0 else "left")
+    v = "" if abs(dy) < cfg.hand_cue_tol else ("down" if dy > 0 else "up")
+    if not h and not v:
+        return "hand_forward"
+    return "hand_" + "_".join(p for p in (v, h) if p)
 
 
 def select_target(dets: tuple[Detection, ...], target: str | None, last_box: Detection | None,
@@ -656,19 +698,27 @@ def _on_enter(s: State, now: float, cfg: GuidanceConfig) -> tuple[State, list[Ef
         s, fx = _leave_find(s, cfg, keep_stream=True)
         return replace(s, mode=Mode.IDLE), fx + [say("search_stopped", interrupt=True)]
     if s.mode == Mode.WITHIN_REACH:
-        target = s.target
-        # Build a new items tuple with the current item marked FOUND (all others unchanged).
-        # ``enumerate`` gives (position, item) pairs.
-        items = tuple(replace(it, status=FOUND) if i == s.index else it for i, it in enumerate(s.items))
-        s, fx = _leave_find(s, cfg, keep_stream=True)
-        nxt = next_pending_index(items, s.index)
-        if nxt is None:
-            # Nothing left to find: stay on this item and celebrate.
-            s = replace(s, mode=Mode.IDLE, items=items)
-            return s, fx + [say("checked_off_done", interrupt=True, item=target)]
-        s = replace(s, mode=Mode.IDLE, items=items, index=nxt)
-        return s, fx + [say("checked_off_next", interrupt=True, item=target, next=items[nxt].name)]
+        return _check_off(s, cfg)
     return s, []
+
+
+def _check_off(s: State, cfg: GuidanceConfig) -> tuple[State, list[Effect]]:
+    """Mark the current item FOUND, stop the search and move on to the next pending item.
+
+    Used by the shutter press within reach and by the hand guidance ("That's it.").
+    """
+    target = s.target
+    # Build a new items tuple with the current item marked FOUND (all others unchanged).
+    # ``enumerate`` gives (position, item) pairs.
+    items = tuple(replace(it, status=FOUND) if i == s.index else it for i, it in enumerate(s.items))
+    s, fx = _leave_find(s, cfg, keep_stream=True)
+    nxt = next_pending_index(items, s.index)
+    if nxt is None:
+        # Nothing left to find: stay on this item and celebrate.
+        s = replace(s, mode=Mode.IDLE, items=items)
+        return s, fx + [say("checked_off_done", interrupt=True, item=target)]
+    s = replace(s, mode=Mode.IDLE, items=items, index=nxt)
+    return s, fx + [say("checked_off_next", interrupt=True, item=target, next=items[nxt].name)]
 
 
 def _start_identify(s: State, now: float, cfg: GuidanceConfig) -> tuple[State, list[Effect]]:
@@ -757,7 +807,45 @@ def _on_frame(s: State, f: Frame, now: float, cfg: GuidanceConfig) -> tuple[Stat
     # (the lost time-out in _timers handles a long absence).
     if det is None:
         return s, []
-    return _guide(s, det, now, cfg, acquired=False)
+    was_within_reach = s.mode == Mode.WITHIN_REACH
+    s, fx = _guide(s, det, now, cfg, acquired=False)
+    # Once the item has been within reach for a frame already, steer the hand onto it.
+    if was_within_reach and s.mode == Mode.WITHIN_REACH:
+        s, hfx = _guide_hand(s, f, det, now, cfg)
+        fx += hfx
+    return s, fx
+
+
+def _guide_hand(s: State, f: Frame, item: Detection, now: float,
+                cfg: GuidanceConfig) -> tuple[State, list[Effect]]:
+    """Hand guidance while the item is within reach: "Hand left." / "Reach forward." until the
+    hand covers the item, then "That's it." (and the item is checked off if configured)."""
+    if not cfg.hand_guidance_enabled:
+        return s, []
+    t = s.track
+    hand = pick_hand(f.detections, cfg)
+    if hand is None:
+        return replace(s, track=replace(t, hand_touch_since=None)), []
+    if hand_on_item(hand, item, cfg):
+        since = t.hand_touch_since if t.hand_touch_since is not None else now
+        t = replace(t, hand_touch_since=since)
+        s = replace(s, track=t)
+        # A brief overlap while the hand passes by is not a grab: it must hold for a moment.
+        if now - since < cfg.hand_touch_hold_s or t.hand_said == "hand_on_item":
+            return s, []
+        s = replace(s, track=replace(t, hand_said="hand_on_item", hand_said_at=now))
+        fx: list[Effect] = [say("hand_on_item", interrupt=True)]
+        if cfg.hand_auto_check_off:
+            s, cfx = _check_off(s, cfg)
+            fx += cfx
+        return s, fx
+    word = hand_direction(hand, item, cfg)
+    t = replace(t, hand_touch_since=None)
+    due = t.hand_said_at is None or now - t.hand_said_at >= cfg.hand_repeat_s
+    if word != t.hand_said or due:
+        t = replace(t, hand_said=word, hand_said_at=now)
+        return replace(s, track=t), [say("hand_dir", hd=word)]
+    return replace(s, track=t), []
 
 
 def _check_wrong_item(s: State, f: Frame, det: Detection | None, now: float,
@@ -807,7 +895,8 @@ def _guide(s: State, box: Detection, now: float, cfg: GuidanceConfig,
             return _update_tone(s, box, cfg)
         # drifted away: back to guiding and say the new direction right away
         s = replace(s, mode=Mode.GUIDING)
-        t = replace(t, reach_since=None, said_h=None, said_at=None)
+        t = replace(t, reach_since=None, said_h=None, said_at=None,
+                    hand_said=None, hand_said_at=None, hand_touch_since=None)
     else:
         # "Within reach" = centered AND the box is tall enough (close to the camera).
         reach = h_dir == "straight" and box.h >= cfg.reach_h

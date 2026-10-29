@@ -26,12 +26,12 @@ network:
 
 # The object-detection model (YOLO). "weights" is the trained model file.
 model:
-  # Stage A + Products-6K model, second pass with cleaner in-store boxes (Freiburg test mAP50 0.922;
-  # Products-6K v2 test mAP50 0.796 vs 0.780 for grocereye_p6k and 0.300 for Stage A alone;
-  # see models/grocereye_p6k2/eval_report.md). Previous: models/grocereye_a/best.pt (0.930).
+  # Stage A + Products-6K + hand model, 26 classes (Freiburg test mAP50 0.925; Products-6K v2 test
+  # 0.773 on the grocery classes; hand AP50 0.982; see models/grocereye_hand/eval_report.md).
+  # Previous: models/grocereye_p6k2/best.pt (25 classes, Freiburg 0.922, Products-6K 0.796).
   # Stock COCO for pipeline debugging: weights: yolo11n.pt, classes_file: config/classes_coco.yaml, imgsz: 640
   backend: ultralytics   # ultralytics | darknet_opencv | scripted
-  weights: models/grocereye_p6k2/best.pt
+  weights: models/grocereye_hand/best.pt
   classes_file: config/classes.yaml   # id -> spoken name for the classes this model knows
   device: auto           # auto picks CUDA, then Apple MPS, then CPU
   imgsz: 320          # match the training size
@@ -86,6 +86,17 @@ guidance:
   wrong_item_center_tol: 0.15   # the other item must be this close to center to be mentioned
   wrong_item_repeat_s: 5.0      # repeat the warning no more often than this
   non_item_classes: [hand]      # detector classes that are never spoken as an item (FR-20, FR-31)
+
+  # Hand guidance (needs a model with the hand class, e.g. models/grocereye_hand). Once the
+  # item is within reach, the visible hand is steered onto it ("Hand left.", "Reach forward.")
+  # and "That's it." checks the item off when the hand covers it.
+  hand_guidance_enabled: true
+  hand_conf: 0.5             # hand box confidence floor
+  hand_cue_tol: 0.08         # hand within this of the item center (frame fraction) = aligned
+  hand_touch_overlap: 0.3    # share of the hand box that must overlap the item to count as touching
+  hand_touch_hold_s: 0.5     # ... held this long before "That's it."
+  hand_repeat_s: 1.5         # repeat an unchanged hand cue this often
+  hand_auto_check_off: true  # "That's it." also checks the item off (false: press the shutter)
 
   # Panned guidance tone (FR-21)
   # A beep in the headphones that comes from the target's side and speeds up as you get close.

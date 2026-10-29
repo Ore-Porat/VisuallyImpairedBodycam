@@ -193,6 +193,17 @@ class GuidanceConfig(_Model):
     # never spoken as a found, wrong or identified item; later guidance will use them to steer.
     non_item_classes: list[str] = ["hand"]
 
+    # Hand guidance: once the item is within reach, steer the shopper's hand onto it and say
+    # "That's it." when the hand covers the item (needs a model with the hand class).
+    hand_guidance_enabled: bool = True
+    hand_class: str = "hand"
+    hand_conf: float = 0.5          # hand box confidence floor
+    hand_cue_tol: float = 0.08      # hand within this of the item center = aligned on that axis
+    hand_touch_overlap: float = 0.3 # share of the hand box that must overlap the item = touching
+    hand_touch_hold_s: float = 0.5  # ... held this long before "That's it."
+    hand_repeat_s: float = 1.5      # repeat an unchanged hand cue this often
+    hand_auto_check_off: bool = True  # "That's it." also checks the item off
+
     # Optional beeps that speed up as the item gets closer and pan left/right with it.
     tones_enabled: bool = True
     tone_freq_hz: int = 880
@@ -230,9 +241,11 @@ class GuidanceConfig(_Model):
             raise ValueError("tone_interval_min_ms must be <= tone_interval_max_ms")
         # getattr(self, name) reads a field by its name as a string, so one loop can check all
         # three confidence thresholds.
-        for name in ("conf_find", "conf_identify", "conf_wrong_item"):
+        for name in ("conf_find", "conf_identify", "conf_wrong_item", "hand_conf", "hand_touch_overlap"):
             if not 0 < getattr(self, name) <= 1:
                 raise ValueError(f"{name} must be in (0, 1]")
+        if not 0 <= self.hand_cue_tol < 0.5:
+            raise ValueError("need 0 <= hand_cue_tol < 0.5")
         return self
 
 

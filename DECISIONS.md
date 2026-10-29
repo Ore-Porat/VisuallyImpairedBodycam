@@ -35,7 +35,8 @@ Choices made where the PRD (`PRD.pdf`) was ambiguous or left room (PRD rule 7). 
 - Within-reach exits back to guiding only when the box drops below `reach_h * 0.8` or leaves the straight-ahead zone, to avoid flicker.
 - "Getting closer" (FR-22, P2) is implemented but off by default.
 - On device disconnect the server quietly goes to STANDBY; the device re-sends its switch position on reconnect, so the user hears "Connected" then "Ready". An active search is not resumed.
-- `non_item_classes` (default `[hand]`): detector classes that are never spoken as a found, wrong (FR-20) or identified (FR-31) item. The hand is detected so later guidance can steer it to the item; today it is only filtered out.
+- `non_item_classes` (default `[hand]`): detector classes that are never spoken as a found, wrong (FR-20) or identified (FR-31) item, and never offered on the shopping list.
+- Hand guidance runs only in WITHIN_REACH (item close and centered), so the shelf-level cues stay unchanged. It compares the hand box center with the item box center: a short cue names the way the HAND must move ("Hand up and left.", "Reach forward."), spoken on change or every `hand_repeat_s`. When the hand covers the item (center inside the item box, or >= `hand_touch_overlap` of the hand box overlapping) for `hand_touch_hold_s`, it says "That's it." and checks the item off (`hand_auto_check_off`), the same path as the shutter press. Only the most confident hand box counts, so a second shopper's hand in view is ignored.
 
 ## Audio (FR-60..66)
 - Priorities: system 3 > confirmation 2 > guidance 1 > info 0. Each phrase's priority is in `phrases.yaml`.

@@ -4,7 +4,7 @@ A vintage SLR film camera, worn on a neck strap, retrofitted with a Raspberry Pi
 USB camera. It helps blind and low-vision shoppers find the right item on a shelf, hands free,
 using only audio:
 
-- **Find mode** guides you to an item on your shopping list: *"Pasta found. Slightly left. Eye level."* ... *"Within reach. Pasta straight ahead."*
+- **Find mode** guides you to an item on your shopping list: *"Pasta found. Slightly left. Eye level."* ... *"Within reach. Pasta straight ahead."* ... *"Hand up and left."* ... *"Reach forward."* ... *"That's it. Pasta checked off."* (the hand cues need a model with the `hand` class, see `guidance.hand_guidance_enabled`)
 - **Identify mode** tells you what you're holding: *"This is coffee. It's on your list."*
 
 Team #4 Colorado Dreaming, GEEN 1400 Fall 2026. The product spec is [`PRD.pdf`](PRD.pdf);
@@ -171,6 +171,9 @@ and set `camera.index` in `config/device.yaml`.
   `config/server.yaml` to `0.5 - <observed center y>`.
 - **Within reach:** with the item at arm's length straight ahead, note the box height and set
   `guidance.reach_h` a little below it.
+- **Hand cues:** if "Hand left" and "Hand right" come out swapped, `flip_horizontal` fixes both the
+  shelf and the hand cues. Raise `guidance.hand_cue_tol` if the cues flip-flop while the hand is
+  nearly on the item; lower `hand_touch_overlap` if "That's it" never comes.
 - **Mirrored camera:** set `guidance.flip_horizontal: true` if "left" and "right" come out swapped.
 - **Confidence:** `training/pick_threshold.py --write` sets `guidance.conf_find` from held-out photos (TR-14).
 
