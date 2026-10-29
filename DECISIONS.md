@@ -58,7 +58,7 @@ Choices made where the PRD (`PRD.pdf`) was ambiguous or left room (PRD rule 7). 
 - First-run tutorial (FR-57): the device sends `help` on its first connection and stores a flag in `data/device_state/first_run_done`.
 - Default pins (BCM): shutter 17, advance 27, rewind 22, switch a 5 / b 6, fallback volume buttons 23 / 24. These avoid SPI0 (7-11, MCP3002) and I2S (18-21).
 - The volume ADC is an MCP3002 (10-bit, two channels), read with its two-byte SPI command (`0x68` for CH0, `0x78` for CH1). Its VDD is also the reference, so VDD must be 3.3 V.
-- Default `device.yaml` volume calibration is computed from the measured resistances with a 5.6k divider read by a 10-bit MCP3002 at VDD 3.3 V: 464 / 531 / 569 counts. Re-run `slr device calibrate-volume` because the actual pot determines the range.
+- The shipped `device.yaml` volume calibration was measured on the current dial and divider: 399 / 450 / 501 counts (CH0). Re-run `slr device calibrate-volume` if the dial or wiring changes. Calibration rejects a reading at only one ADC rail (for example `raw_max` near 1022 while `raw_min` is around 399), because that means the wiper opened at that end; a real full-range potentiometer may legitimately touch both rails.
 
 ## Device
 - Camera is a USB UVC webcam read through OpenCV (the `opencv` backend is the default); the CSI `picamera2` backend remains available but is no longer installed by `install_pi.sh`.

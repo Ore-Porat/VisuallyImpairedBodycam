@@ -32,7 +32,7 @@ Words you will see
 - GPIO: the Raspberry Pi's input/output pins; ADC / MCP3002: the chip that reads the volume
   dial; FR-xx: requirement numbers from the product spec, PRD.pdf.
 - regular expression (re): a pattern language for finding text, used here to find
-  ``raw_min: 464`` lines in device.yaml and replace just the number.
+  ``raw_min: 399`` lines in device.yaml and replace just the number.
 """
 
 from __future__ import annotations
@@ -294,7 +294,7 @@ def calibrate_volume(dcfg, config_dir: Path) -> None:
     """
     import statistics
 
-    from slr.device.volume_dial import Mcp3002Reader
+    from slr.device.volume_dial import Mcp3002Reader, check_calibration_points
 
     try:
         reader = Mcp3002Reader(dcfg.volume.adc)
@@ -311,10 +311,13 @@ def calibrate_volume(dcfg, config_dir: Path) -> None:
         points[key] = int(statistics.median(samples))
         # "spread" = max - min of the samples; a big spread hints at a noisy or loose wire.
         print(f"  {key} = {points[key]} (spread {max(samples) - min(samples)} counts)")
-    vals = [points["raw_min"], points["raw_mid"], points["raw_max"]]
-    # The readings must climb steadily or fall steadily; anything else means a wiring problem.
-    if not (vals[0] < vals[1] < vals[2] or vals[0] > vals[1] > vals[2]):
-        raise SystemExit("readings are not monotonic; check the wiring (FR-44) and try again")
+    # Reject a point that sits on one ADC rail while the other end does not (a wiper that opened
+    # at that end), and reject readings that do not climb or fall steadily. Never overwrite a
+    # good calibration with a clearly broken one.
+    try:
+        check_calibration_points(points)
+    except ValueError as e:
+        raise SystemExit(f"{e}; calibration not saved")
     path = config_dir / "device.yaml"
     text = path.read_text(encoding="utf-8")
     for key, val in points.items():

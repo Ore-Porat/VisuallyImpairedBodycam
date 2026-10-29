@@ -6,10 +6,9 @@ Turns the position of a physical knob into a volume level from 0 (mute) to 10, a
 level into a loudness multiplier for the audio player. (FR-44..46 are requirement numbers from
 the product spec, PRD.pdf: calibration, steady readings, and the fallback buttons.)
 
-The dial is a variable resistor (4.64k min, 6.04k middle, 7.0k max, roughly logarithmic) in a
-divider read by an MCP3002 (SPI). ``VolumeCurve`` maps raw counts to a 0..1 dial position through the
-three calibration points; ``VolumeFilter`` turns noisy samples into a steady 0..10 level.
-Both are pure and unit tested.
+The dial is a variable resistor in a divider read by an MCP3002 (SPI). ``VolumeCurve`` maps raw
+counts to a 0..1 dial position through the three calibration points; ``VolumeFilter`` turns noisy
+samples into a steady 0..10 level. Both are pure and unit tested.
 
 HOW IT FITS IN
 --------------
@@ -58,6 +57,37 @@ log = logging.getLogger(__name__)
 
 # Top volume level. Levels run 0..10, where 0 is mute.
 LEVELS = 10
+
+# The MCP3002 is a 10-bit ADC, so a reading runs 0..1023. A reading this close to either end
+# usually means the input is open or shorted, not that the knob is at a real position.
+ADC_MAX_COUNTS = 1023
+ADC_RAIL_MARGIN = 3
+
+
+def at_rail(raw: int) -> bool:
+    """True if ``raw`` is close enough to 0 or 1023 to look like a broken input."""
+    return raw <= ADC_RAIL_MARGIN or raw >= ADC_MAX_COUNTS - ADC_RAIL_MARGIN
+
+
+def check_calibration_points(points: dict[str, int]) -> None:
+    """Validate measured min / mid / max readings before they are saved to device.yaml.
+
+    A real potentiometer may legitimately touch both rails (0 and 1023). A divider should touch
+    neither. But when only ONE end is at a rail and the other is not, the wiper is probably open
+    or shorted at that end; saving that point would squash most of the dial into a tiny range.
+    Raises ``ValueError`` with a user-facing message so ``calibrate_volume`` can abort safely.
+    """
+    keys = ("raw_min", "raw_mid", "raw_max")
+    low_rail = at_rail(points["raw_min"])
+    high_rail = at_rail(points["raw_max"])
+    if low_rail != high_rail:
+        bad = "raw_min" if low_rail else "raw_max"
+        raise ValueError(
+            f"{bad} = {points[bad]} is at the ADC rail while the other end is not; "
+            "the dial wiper is probably open or shorted. Check the divider and wiring")
+    vals = [points[key] for key in keys]
+    if not (vals[0] < vals[1] < vals[2] or vals[0] > vals[1] > vals[2]):
+        raise ValueError("readings are not monotonic; check the wiring")
 
 
 class VolumeCurve:
@@ -265,10 +295,11 @@ class Mcp3002Reader:
         # One test read: raises if SPI is not available. A first reading at a rail usually means
         # the divider is disconnected or VDD is wrong, so say so instead of silently using it.
         first = self.read()
-        if first in (0, 1023):
+        if at_rail(first):
             log.warning(
-                "MCP3002 first reading is %d (bytes %s); check the dial divider, CH%d wiring "
-                "and that VDD is 3.3 V", first, self.rx_text(), self.channel)
+                "MCP3002 first reading is %d (bytes %s); the input may be open or shorted. "
+                "Check the dial divider, CH%d wiring and that VDD is 3.3 V",
+                first, self.rx_text(), self.channel)
 
     def rx_text(self) -> str:
         """Format the last SPI bytes for a log or terminal line."""

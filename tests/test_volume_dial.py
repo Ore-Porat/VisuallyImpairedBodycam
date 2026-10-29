@@ -33,8 +33,8 @@ import math
 import pytest
 
 from slr.common.config import VolumeCalibration, VolumeConfig
-from slr.device.volume_dial import (StepVolume, VolumeCurve, VolumeFilter, level_from_position,
-                                    level_to_gain)
+from slr.device.volume_dial import (StepVolume, VolumeCurve, VolumeFilter, at_rail,
+                                    check_calibration_points, level_from_position, level_to_gain)
 
 # Calibration used by most tests: raw counts at dial minimum, middle and maximum.
 CAL = VolumeCalibration(raw_min=23924, raw_mid=27397, raw_max=29332)
@@ -89,6 +89,31 @@ def test_bad_calibration_rejected():
     """A middle value that is not between min and max is a config error."""
     with pytest.raises(ValueError):
         VolumeCalibration(raw_min=1, raw_mid=5, raw_max=3)
+
+
+def test_rail_readings_are_flagged():
+    """Readings within a few counts of 0 or 1023 look like an open or shorted input."""
+    assert at_rail(0) and at_rail(3) and at_rail(1020) and at_rail(1023)
+    assert not at_rail(4) and not at_rail(1019)
+
+
+def test_calibration_rejects_one_sided_rail():
+    """A divider that touches only one rail has an open wiper; never save that point."""
+    # The real case: the dial ends around 501, but the wiper opens and reads 1022 at the stop.
+    with pytest.raises(ValueError, match="rail"):
+        check_calibration_points({"raw_min": 399, "raw_mid": 450, "raw_max": 1022})
+    with pytest.raises(ValueError, match="rail"):
+        check_calibration_points({"raw_min": 0, "raw_mid": 450, "raw_max": 501})
+    # A real full-range potentiometer touches both rails; both are allowed.
+    check_calibration_points({"raw_min": 0, "raw_mid": 512, "raw_max": 1023})
+    # The measured divider range touches neither rail; that is the normal case.
+    check_calibration_points({"raw_min": 399, "raw_mid": 450, "raw_max": 501})
+
+
+def test_calibration_rejects_nonmonotonic_points():
+    """A middle reading outside the min/max order is a wiring problem."""
+    with pytest.raises(ValueError, match="monotonic"):
+        check_calibration_points({"raw_min": 399, "raw_mid": 501, "raw_max": 450})
 
 
 def test_quantize_with_hysteresis():

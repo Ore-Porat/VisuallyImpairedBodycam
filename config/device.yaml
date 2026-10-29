@@ -66,14 +66,14 @@ volume:
     spi_device: 0        # chip select: 0 = CE0 (GPIO 8), 1 = CE1 (GPIO 7)
     channel: 0           # CH0 or CH1 (the MCP3002 has two inputs)
     max_speed_hz: 1000000   # SPI clock speed (1 MHz)
-  # Raw MCP3002 counts (0..1023) at dial min / middle / max (FR-44). Defaults are computed from
-  # the measured 4.64k / 6.04k / 7.0k dial with a 5.6k fixed resistor and VDD = 3.3 V.
-  # The MCP3002 uses VDD as its reference (it has no separate VREF pin).
-  # Re-run `slr device calibrate-volume` on the real hardware.
+  # Raw MCP3002 counts (0..1023) at dial min / middle / max (FR-44). These were measured on
+  # the current dial and divider: 399 / 450 / 501. Re-run `slr device calibrate-volume` after
+  # changing the dial or wiring. The MCP3002 uses VDD as its reference (it has no separate VREF
+  # pin), so VDD must be 3.3 V. A reading at 0 or 1023 means the input is open or shorted.
   calibration:
-    raw_min: 464
-    raw_mid: 531
-    raw_max: 569
+    raw_min: 399
+    raw_mid: 450
+    raw_max: 501
     curve: piecewise     # piecewise | log
   sample_hz: 20          # how many times per second the dial is read
   median_n: 5            # take the median of the last 5 readings to ignore one-off spikes

@@ -366,11 +366,12 @@ class VolumeCalibration(_Model):
     """``volume.calibration:`` block: raw ADC readings at the dial's min / middle / max.
 
     Recorded by ``slr device calibrate-volume`` (FR-44). The three points let the software map
-    any raw reading to a 0..100% dial position even if the dial is not linear.
+    any raw reading to a 0..100% dial position even if the dial is not linear. The defaults below
+    are the values measured on the current dial; re-run calibration if the hardware changes.
     """
-    raw_min: float = 464
-    raw_mid: float = 531
-    raw_max: float = 569
+    raw_min: float = 399
+    raw_mid: float = 450
+    raw_max: float = 501
     # piecewise = straight lines between the three points; log = fit a logarithmic curve.
     curve: Literal["piecewise", "log"] = "piecewise"
 
