@@ -113,6 +113,10 @@ def test_phrase_rendering_uses_spoken_names(catalog):
     assert catalog.text("direction", {"h": "slightly_left", "v": "eye"}) == "Slightly left. Eye level."
     assert catalog.text("item_announce", {"n": 2, "total": 5, "item": "pasta"}) == "Item 2 of 5: pasta."
     assert catalog.text("item_marked_found", {"item": "tomato_sauce"}) == "Tomato sauce marked found."
+    assert catalog.text("item_marked_found_next", {"item": "pasta", "next": "tomato_sauce"}) == \
+        "Pasta marked found. Next: tomato sauce."
+    assert catalog.text("item_marked_found_done", {"item": "pasta"}) == \
+        "Pasta marked found. That was the last item on your list."
     assert catalog.text("identified_many", {"items": ["pasta", "milk", "rice"]}) == \
         "I see pasta, milk, and rice."
     assert catalog.text("wrong_item", {"other": "pasta", "item": "tomato_sauce"}) == \

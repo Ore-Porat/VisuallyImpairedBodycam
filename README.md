@@ -47,7 +47,7 @@ Sim keys (in the terminal or the debug window):
 | `â†` / `p` | prev_item | previous item |
 | `Space` | enter | stop/restart search / check off when within reach |
 | `i` | identify | what is in front of the camera? |
-| `t` | toggle_found | mark the current item found / not found |
+| `t` | toggle_found | mark the current item found (and advance) / mark it not found |
 | `o` / `x` | mode_on / mode_off | start guidance / silent monitor (the mode switch) |
 | `+` / `-` | volume | volume 0 to 10 |
 | `h` / `s` | help / status | spoken help, progress |
@@ -60,8 +60,9 @@ The shipped config sets `guidance.stream_in_idle: true` and `stream_in_off: true
 and detector run in both switch positions, so the debug view stays live. OFF is a silent
 monitor except for the explicit TOGGLE commands below. ON automatically searches for the
 current list item, gives shelf and hand cues, and
-plays the guidance beeps. A short flick to the TOGGLE position marks the current item found or
-not found and keeps the same item selected. Holding TOGGLE for `toggle_hold_s` runs Identify
+plays the guidance beeps. A short flick to the TOGGLE position marks the current item found,
+moves to the next pending item, and starts guiding it when ON. Marking a found item not found
+keeps it selected and restarts its search. Holding TOGGLE for `toggle_hold_s` runs Identify
 (or use a long shutter press). Both work even while the switch is OFF.
 
 The first run renders a few hundred speech clips in the background (about a minute). After that
@@ -103,7 +104,8 @@ If the package is not installed, run the same commands from the repo root with
 | `slr clips build / build-system / download-voice` | speech clips |
 
 The shopping list can also be edited by a helper in any browser, with a screen reader if needed,
-at `http://<laptop>:8767/` while the server runs (FR-4).
+at `http://<laptop>:8767/` while the server runs (FR-4). An open page updates itself within about
+a second when the device or another browser changes the list; no manual reload is needed.
 
 Session logs (frames, detections, state changes, cues, latency, loss) go to `data/logs/` as JSONL
 (FR-72).
@@ -205,7 +207,7 @@ client), `training/` (dataset, train, evaluate, thresholds, capture), `deploy/` 
 4. Power on the device: it says "Starting up". With the switch OFF, video keeps running silently.
 5. Mode switch to ON. It says "Searching for ..." and starts giving direction/hand cues. Turn the volume dial and check "Volume N" in the headphones.
 6. `slr list reset` (or the web editor) and confirm the list with `slr list show`.
-7. Flick TOGGLE: it marks the current item found. Flick again to mark it not found.
+7. Flick TOGGLE: it marks the current item found and advances to the next pending item. Use previous-item or the web editor to go back and mark one not found.
 8. Quick check: hold TOGGLE to Identify a known item, then switch ON for a Find of one item.
 9. After the demo: hold shutter + advance for 5 s to shut down safely.
 

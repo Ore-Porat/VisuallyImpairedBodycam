@@ -824,11 +824,11 @@ def _check_off(s: State, cfg: GuidanceConfig, now: float) -> tuple[State, list[E
 
 
 def _toggle_current_item(s: State, now: float, cfg: GuidanceConfig) -> tuple[State, list[Effect]]:
-    """Flip the current item between PENDING and FOUND, keeping the same item selected.
+    """Flip the current item between PENDING and FOUND.
 
-    This works in every mode, including STANDBY, so the switch can correct the list even
-    while the device is otherwise silent. If a search is active for this item, marking it
-    found stops that search; marking it pending again starts a new search when ON.
+    Marking an item found auto-advances to the next pending item (wrapping around) and, when
+    ON, starts guiding it. Marking a found item pending keeps it selected and restarts a
+    search for it when ON. This works in every mode, including STANDBY.
     """
     if not s.items:
         return s, [say("list_empty", interrupt=True)]
@@ -837,20 +837,34 @@ def _toggle_current_item(s: State, now: float, cfg: GuidanceConfig) -> tuple[Sta
     marking_found = item.status == PENDING
     items = tuple(replace(it, status=FOUND if marking_found else PENDING)
                   if i == s.index else it for i, it in enumerate(s.items))
+    nxt = next_pending_index(items, s.index) if marking_found else None
+    on = s.mode != Mode.STANDBY
+    will_search = (cfg.auto_find_on_mode_on and on
+                   and (not marking_found or nxt is not None))
 
     fx: list[Effect] = []
     if s.mode in FIND_MODES:
-        # Stop guiding a found item; keep the monitor stream if ON is configured that way.
-        # If we are about to restart for a now-pending item, keep it running to avoid a blip.
-        restarting = not marking_found and cfg.auto_find_on_mode_on
-        s, fx = _leave_find(s, cfg, keep_stream=cfg.stream_in_idle or restarting)
+        # Stop the old search. Keep the stream running if we are about to start another.
+        s, fx = _leave_find(s, cfg, keep_stream=cfg.stream_in_idle or will_search)
         s = replace(s, mode=Mode.IDLE)
     s = replace(s, items=items)
-    key = "item_marked_found" if marking_found else "item_marked_pending"
-    fx.append(say(key, interrupt=True, item=item.name))
 
-    # ON means "guide the current item". If the user just restored it to pending, start again.
-    if not marking_found and cfg.auto_find_on_mode_on and s.mode == Mode.IDLE:
+    if marking_found:
+        if nxt is None:
+            fx.append(say("item_marked_found_done", interrupt=True, item=item.name))
+            return s, fx
+        s = replace(s, index=nxt)
+        fx.append(say("item_marked_found_next", interrupt=True,
+                      item=item.name, next=items[nxt].name))
+        if will_search:
+            s = _start_search(s, items[nxt].name, now, cfg)
+            if not any(isinstance(effect, Stream) and effect.on for effect in fx):
+                fx.append(Stream(on=True, purpose="find"))
+        return s, fx
+
+    # Marking a found item pending: keep it selected so it can be searched again.
+    fx.append(say("item_marked_pending", interrupt=True, item=item.name))
+    if will_search:
         s = _start_search(s, item.name, now, cfg)
         if not any(isinstance(effect, Stream) and effect.on for effect in fx):
             fx.append(Stream(on=True, purpose="find"))

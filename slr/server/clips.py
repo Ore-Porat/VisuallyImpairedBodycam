@@ -190,7 +190,7 @@ class PhraseCatalog:
         for c in targets:
             for key in ("found", "searching", "not_seeing", "within_reach", "identified",
                         "identified_on_list", "checked_off_done", "item_marked_found",
-                        "item_marked_pending"):
+                        "item_marked_found_done", "item_marked_pending"):
                 cues.append(Say(key, {"item": c}))
         # List-position phrases depend on the exact list, so only for the current items.
         total = len(items)
@@ -201,6 +201,7 @@ class PhraseCatalog:
             for other in names:
                 if other != name:
                     cues.append(Say("checked_off_next", {"item": name, "next": other}))
+                    cues.append(Say("item_marked_found_next", {"item": name, "next": other}))
         return cues
 
 

@@ -855,16 +855,27 @@ def test_standby_ignores_normal_buttons():
         assert d.s.mode == Mode.STANDBY
 
 
-def test_toggle_found_works_in_standby_and_keeps_the_same_item():
-    """A short TOGGLE corrects the list even while OFF, and toggling again flips it back."""
+def test_toggle_found_works_in_standby_and_advances():
+    """A short TOGGLE edits the list even while OFF and moves to the next pending item."""
     d = Driver(state=g.initial_state(items("pasta", "coffee")))
     fx = d.control("toggle_found")
-    assert keys(fx) == ["item_marked_found"]
+    assert keys(fx) == ["item_marked_found_next"]
     assert d.s.mode == Mode.STANDBY
-    assert d.s.items[0].status == FOUND and d.s.index == 0
+    assert d.s.items[0].status == FOUND and d.s.index == 1
     fx = d.control("toggle_found")
-    assert keys(fx) == ["item_marked_pending"]
-    assert d.s.items[0].status == PENDING and d.s.index == 0
+    assert keys(fx) == ["item_marked_found_done"]
+    assert d.s.items[1].status == FOUND and d.s.index == 1
+
+
+def test_off_toggle_advances_then_on_guides_the_next_item():
+    """A toggle while OFF moves the cursor; switching ON then searches the new current item."""
+    cfg = GuidanceConfig(tones_enabled=False, auto_find_on_mode_on=True)
+    d = Driver(state=g.initial_state(items("pasta", "coffee")), cfg=cfg)
+    assert keys(d.control("toggle_found")) == ["item_marked_found_next"]
+    assert d.s.index == 1 and d.s.mode == Mode.STANDBY
+    fx = d.control("mode_on")
+    assert keys(fx) == ["searching"]
+    assert d.s.mode == Mode.SEARCHING and d.s.target == "coffee"
 
 
 def test_toggle_found_with_empty_list_says_so():
@@ -873,15 +884,27 @@ def test_toggle_found_with_empty_list_says_so():
     assert keys(d.control("toggle_found")) == ["list_empty"]
 
 
-def test_toggle_found_stops_an_active_search():
-    """Marking the item found while guiding cancels the search instead of guiding a found item."""
+def test_toggle_found_during_search_advances_and_guides_next_item():
+    """Marking the guided item found stops its search and starts the next pending item."""
     cfg = GuidanceConfig(tones_enabled=False, auto_find_on_mode_on=True)
     d = guiding_driver(cfg=cfg)
     fx = d.control("toggle_found")
-    assert keys(fx) == ["item_marked_found"]
+    assert keys(fx) == ["item_marked_found_next"]
     assert d.s.items[0].status == FOUND
-    assert d.s.mode == Mode.IDLE and d.s.target is None
-    assert d.s.index == 0
+    assert d.s.mode == Mode.SEARCHING and d.s.target == "coffee"
+    assert d.s.index == 1
+    assert Stream(on=True, purpose="find") in fx
+
+
+def test_toggle_found_last_pending_item_stays_put():
+    """When no pending item remains, TOGGLE marks the last item and does not wrap around."""
+    state = replace(g.initial_state((ListItem("pasta", FOUND), ListItem("coffee"))),
+                    mode=Mode.IDLE, index=1)
+    d = Driver(state=state)
+    fx = d.control("toggle_found")
+    assert keys(fx) == ["item_marked_found_done"]
+    assert d.s.items[1].status == FOUND and d.s.index == 1
+    assert d.s.mode == Mode.IDLE
 
 
 def test_toggle_pending_restarts_search_when_on():

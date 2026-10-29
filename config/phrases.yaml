@@ -53,6 +53,8 @@ phrases:
   item_announce:       {priority: confirmation, text: "Item {n} of {total}: {item}."}
   item_announce_found: {priority: confirmation, text: "Item {n} of {total}: {item}. Already found."}
   item_marked_found:   {priority: confirmation, text: "{item} marked found."}
+  item_marked_found_next: {priority: confirmation, text: "{item} marked found. Next: {next}."}
+  item_marked_found_done: {priority: confirmation, text: "{item} marked found. That was the last item on your list."}
   item_marked_pending: {priority: confirmation, text: "{item} marked not found."}
   # Find mode: searching, guiding, reaching, checking off
   searching:           {priority: confirmation, text: "Searching for {item}."}
@@ -84,7 +86,8 @@ phrases:
     # ">-" means: the indented lines below are one long piece of text (line breaks become spaces).
     text: >-
       Mode switch on starts guiding to the current item.
-      Flick the mode switch to the toggle position to mark the current item found or not found.
+      Flick the mode switch to the toggle position to mark the current item found and move to the next item.
+      Flick it on an already found item to mark it not found.
       Hold it there to identify what is in front of the camera.
       Shutter: press to stop or restart the search.
       When an item is within reach, press the shutter to check it off.

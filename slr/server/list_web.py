@@ -1,8 +1,10 @@
 """Small HTTP server on the laptop: clip downloads for the device (FR-53) and an accessible
 shopping list editor for the helper (FR-4).
 
-The editor is plain HTML forms: real labels, real buttons, no scripts, no mouse-only controls,
-and a status message in a live region after every change, so it works with any screen reader.
+The editor is plain HTML forms: real labels, real buttons, no mouse-only controls, and a
+status message in a live region after every change, so it works with any screen reader. A
+small progressive-enhancement script refreshes the open page when another client changes the
+list; without JavaScript the page still works, and a ``noscript`` fallback reloads it.
 
 WHAT THIS FILE DOES
 -------------------
@@ -43,6 +45,7 @@ WORDS YOU WILL SEE
 
 from __future__ import annotations
 
+import hashlib
 import html
 import json
 import logging
@@ -63,6 +66,106 @@ CLIP_NAME = re.compile(r"^[A-Za-z0-9_\-]+$")
 ListOp = Callable[[str, str], str]
 
 
+def list_version(items, current: int) -> str:
+    """A short fingerprint of everything the page displays about the list.
+
+    When the device toggles an item or changes the current index, this value changes, so the
+    open page knows it needs to redraw. It is not a security token; it only avoids pointless
+    DOM updates.
+    """
+    payload = json.dumps([[it.name, it.status] for it in items] + [current],
+                         separators=(",", ":"))
+    return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:12]
+
+
+def render_items(items, current: int, known: dict[str, str]) -> str:
+    """The numbered item list, with stable hooks the browser script can update in place."""
+    esc = html.escape
+    rows = []
+    # One <li> per item, each with a "Remove" form and a "Make current" form.
+    for i, it in enumerate(items):
+        spoken = esc(known.get(it.name, it.name))
+        status = "found" if it.status == FOUND else "not found yet"
+        cur = " (current item)" if i == current else ""
+        rows.append(
+            f'<li data-name="{esc(it.name)}"><span class="info">{i + 1}. {spoken}: '
+            f'<span class="state">{status}</span>'
+            f'<span class="current">{cur}</span></span> '
+            f'<form method="post" action="/list/remove" class="inline">'
+            f'<input type="hidden" name="item" value="{esc(it.name)}">'
+            f'<button type="submit">Remove {spoken}</button></form> '
+            f'<form method="post" action="/list/current" class="inline">'
+            f'<input type="hidden" name="index" value="{i}">'
+            f'<button type="submit">Make {spoken} the current item</button></form></li>'
+        )
+    return "<ol>" + "".join(rows) + "</ol>" if rows else "<p>The list is empty.</p>"
+
+
+def state_payload(items, current: int, known: dict[str, str]) -> dict:
+    """JSON for the polling browser: a version, the status fields, and fresh list HTML."""
+    return {
+        "version": list_version(items, current),
+        "items": [
+            {"name": it.name, "found": it.status == FOUND, "current": i == current}
+            for i, it in enumerate(items)
+        ],
+        "html": render_items(items, current, known),
+    }
+
+
+# Progressive enhancement: the page still works without JavaScript, but when scripts run it
+# polls the state endpoint and updates the open list without a full reload. Status-only
+# changes are patched in place so keyboard/screen-reader focus stays where it was.
+LIVE_UPDATE_SCRIPT = """
+<script>
+(function () {
+  const box = document.getElementById("items");
+  const status = document.getElementById("status");
+  let version = box.dataset.version;
+  let busy = false;
+
+  function apply(state) {
+    if (state.version === version) return;
+    version = state.version;
+    box.dataset.version = version;
+    const rows = Array.from(box.querySelectorAll("li"));
+    const sameOrder = rows.length === state.items.length &&
+      rows.every(function (row, i) { return row.dataset.name === state.items[i].name; });
+    if (sameOrder) {
+      rows.forEach(function (row, i) {
+        row.querySelector(".state").textContent =
+          state.items[i].found ? "found" : "not found yet";
+        row.querySelector(".current").textContent =
+          state.items[i].current ? " (current item)" : "";
+      });
+    } else {
+      box.innerHTML = state.html;
+    }
+    if (status) status.textContent = "Shopping list updated.";
+  }
+
+  async function refresh() {
+    if (busy || document.hidden) return;
+    busy = true;
+    try {
+      const response = await fetch("/list/state.json", {cache: "no-store"});
+      if (response.ok) apply(await response.json());
+    } catch (error) {
+      // Server restarting or offline: keep the page usable and try again next tick.
+    } finally {
+      busy = false;
+    }
+  }
+
+  setInterval(refresh, 1000);
+  document.addEventListener("visibilitychange", function () {
+    if (!document.hidden) refresh();
+  });
+})();
+</script>
+"""
+
+
 def render_page(items, current: int, known: dict[str, str], message: str = "") -> str:
     """Build the HTML for the shopping list page as one big string.
 
@@ -72,22 +175,8 @@ def render_page(items, current: int, known: dict[str, str], message: str = "") -
     message: optional confirmation text shown in the status live region.
     """
     esc = html.escape
-    rows = []
-    # One <li> per item, each with a "Remove" form and a "Make current" form.
-    for i, it in enumerate(items):
-        spoken = esc(known.get(it.name, it.name))
-        status = "found" if it.status == FOUND else "not found yet"
-        cur = " (current item)" if i == current else ""
-        rows.append(
-            f"<li><span>{i + 1}. {spoken}: {status}{cur}</span> "
-            f'<form method="post" action="/list/remove" class="inline">'
-            f'<input type="hidden" name="item" value="{esc(it.name)}">'
-            f'<button type="submit">Remove {spoken}</button></form> '
-            f'<form method="post" action="/list/current" class="inline">'
-            f'<input type="hidden" name="index" value="{i}">'
-            f'<button type="submit">Make {spoken} the current item</button></form></li>'
-        )
-    items_html = "<ol>" + "".join(rows) + "</ol>" if rows else "<p>The list is empty.</p>"
+    version = list_version(items, current)
+    items_html = render_items(items, current, known)
     # The drop-down of every item the model knows, sorted by spoken name.
     options = "".join(f'<option value="{esc(k)}">{esc(v)}</option>'
                       for k, v in sorted(known.items(), key=lambda kv: kv[1]))
@@ -102,6 +191,8 @@ def render_page(items, current: int, known: dict[str, str], message: str = "") -
 <meta charset="utf-8">
 <!-- Makes the page scale properly on phones. -->
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Without JavaScript, reload periodically so another client's edits still appear. -->
+<noscript><meta http-equiv="refresh" content="3"></noscript>
 <title>SLR SLR shopping list</title>
 <style>
   /* Large, high-contrast text; narrow column that is easy to read. */
@@ -121,8 +212,9 @@ def render_page(items, current: int, known: dict[str, str], message: str = "") -
 <!-- Live region: screen readers announce the confirmation message after each change. -->
 {status}
 <h2>Items</h2>
-<!-- The numbered list of items, each with Remove / Make current buttons. -->
-{items_html}
+<!-- The numbered list of items, each with Remove / Make current buttons. The script
+     updates this box in place when the device or another client changes something. -->
+<div id="items" data-version="{version}">{items_html}</div>
 <h2>Add an item</h2>
 <!-- Submitting this form sends a POST to /list/add with the chosen class id. -->
 <form method="post" action="/list/add">
@@ -138,6 +230,7 @@ def render_page(items, current: int, known: dict[str, str], message: str = "") -
   <button type="submit">Remove every item</button>
 </form>
 </main>
+{LIVE_UPDATE_SCRIPT}
 </body>
 </html>
 """
@@ -179,6 +272,11 @@ def make_handler(get_page_data: Callable[[], tuple], list_op: ListOp,
             url = urlparse(self.path)
             if url.path == "/clips/manifest.json":
                 self._send(200, json.dumps(manifest()).encode(), "application/json")
+                return
+            if url.path == "/list/state.json":
+                items, current, known = get_page_data()
+                self._send(200, json.dumps(state_payload(items, current, known)).encode(),
+                           "application/json")
                 return
             if url.path.startswith("/clips/") and url.path.endswith(".wav"):
                 # Strip "/clips/" from the front and ".wav" from the end to get the name.
