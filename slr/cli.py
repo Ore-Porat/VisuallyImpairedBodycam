@@ -101,7 +101,7 @@ def cmd_server(args) -> None:
 
 
 def cmd_device(args) -> None:
-    """``slr device [run|calibrate-volume|test-controls]``: run the device or a device tool."""
+    """``slr device [run|calibrate-volume|test-controls|test-camera]``: run the device or a tool."""
     dcfg = load_device_config(args.config_dir, sim=args.sim)
     ccfg = load_controls_config(args.config_dir)
     if args.action == "run":
@@ -112,6 +112,8 @@ def cmd_device(args) -> None:
         calibrate_volume(dcfg, args.config_dir or default_config_dir())
     elif args.action == "test-controls":
         test_controls(dcfg, ccfg)
+    elif args.action == "test-camera":
+        test_camera(dcfg)
 
 
 def cmd_list(args) -> None:
@@ -274,7 +276,7 @@ def cmd_clips(args) -> None:
 
 
 # --------------------------------------------------------------------------- hardware tools
-# These two only make sense on the Raspberry Pi with the real controls wired up.
+# These three only make sense on the Raspberry Pi with the real hardware attached.
 
 
 def calibrate_volume(dcfg, config_dir: Path) -> None:
@@ -320,6 +322,35 @@ def calibrate_volume(dcfg, config_dir: Path) -> None:
             raise SystemExit(f"could not find {key} in {path}")
     path.write_text(text, encoding="utf-8")
     print(f"saved calibration to {path}")
+
+
+def test_camera(dcfg) -> None:
+    """Open the configured camera, grab one fresh frame and save it as a JPEG.
+
+    This is the quickest way to check a USB webcam on the headless Pi: it prints the picture
+    size and writes ``data/camera_test.jpg`` so you can copy it to the laptop and look at it.
+    """
+    from slr.device.camera import CameraError, make_jpeg_encoder, open_camera
+
+    try:
+        cam = open_camera(dcfg.camera, dcfg.root)
+    except CameraError as e:
+        raise SystemExit(f"camera unavailable: {e}")
+    try:
+        try:
+            frame = cam.capture()
+        except CameraError as e:
+            raise SystemExit(f"camera opened but did not deliver a frame: {e}")
+    finally:
+        cam.close()
+    out = dcfg.path("data/camera_test.jpg")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        out.write_bytes(make_jpeg_encoder()(frame, 85))
+    except ImportError as e:
+        raise SystemExit(f"cannot encode a JPEG: {e}")
+    print(f"camera OK: {frame.shape[1]}x{frame.shape[0]} ({dcfg.camera.backend})")
+    print(f"saved one frame to {out}")
 
 
 def test_controls(dcfg, ccfg) -> None:
@@ -402,7 +433,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     # slr device [action]   (nargs="?" = the action is optional and defaults to "run")
     s = sub.add_parser("device", help="run the device, or device tools")
-    s.add_argument("action", nargs="?", default="run", choices=["run", "calibrate-volume", "test-controls"])
+    s.add_argument("action", nargs="?", default="run",
+                   choices=["run", "calibrate-volume", "test-controls", "test-camera"])
     s.add_argument("--sim", action="store_true", help="use the sim overrides from device.yaml")
     s.set_defaults(func=cmd_device)
 

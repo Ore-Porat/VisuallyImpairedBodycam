@@ -26,11 +26,12 @@ server:
   http_port: 8767        # HTTP port: the device downloads audio clips from here
   discovery_timeout_s: 5.0   # how long to wait for an mDNS answer when host is "auto"
 
-# The camera. On the Pi the Camera Module is read with picamera2; on a laptop a webcam is
-# read with OpenCV; "file" plays a video file or a folder of images (for tests / replay).
+# The camera. The Pi's USB webcam and the laptop's webcam are both read through OpenCV.
+# "picamera2" is still available for a CSI Camera Module; "file" plays a video file or a
+# folder of images (for tests / replay).
 camera:
-  backend: picamera2     # picamera2 | opencv | file
-  index: 0               # opencv backend: webcam index
+  backend: opencv        # opencv | picamera2 | file
+  index: 0               # opencv backend: /dev/videoN (check `v4l2-ctl --list-devices`)
   file: null             # file backend: video file or folder of images
   width: 640             # capture size in pixels
   height: 480
@@ -51,6 +52,7 @@ streaming:
 # Headphone output.
 audio:
   backend: sounddevice   # sounddevice | aplay | null
+  dac: tlv320dac3100     # tlv320dac3100 = configure it over I2C at startup; none = no setup
   device: null           # ALSA / PortAudio device name or index; null = system default
   sample_rate: 22050     # samples per second; matches the Piper voice clips
   blocksize: 512         # audio buffer size in samples (smaller = lower delay, more CPU)
@@ -103,6 +105,8 @@ sim:
     host: 127.0.0.1      # the server runs on this same laptop
   camera:
     backend: opencv      # use the laptop webcam
+  audio:
+    dac: none            # no TLV320 on a laptop
   volume:
     source: keyboard     # + and - keys instead of the dial
   shutdown_command: []   # never power off the laptop

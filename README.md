@@ -1,7 +1,7 @@
 # SLR SLR: Single Lens Reflex Sightless Label Reader
 
 A vintage SLR film camera, worn on a neck strap, retrofitted with a Raspberry Pi Zero 2 W and a
-Pi camera. It helps blind and low-vision shoppers find the right item on a shelf, hands free,
+USB camera. It helps blind and low-vision shoppers find the right item on a shelf, hands free,
 using only audio:
 
 - **Find mode** guides you to an item on your shopping list: *"Pasta found. Slightly left. Eye level."* ... *"Within reach. Pasta straight ahead."*
@@ -12,7 +12,7 @@ implementation choices are in [`DECISIONS.md`](DECISIONS.md).
 
 ```
  SLR body (worn)                                     Laptop
- Pi Camera -> Pi Zero 2 W  --UDP: JPEG frames------>  YOLO detector (GrocerEye-style model)
+ USB Camera -> Pi Zero 2 W  --UDP: JPEG frames------>  YOLO detector (GrocerEye-style model)
  buttons, mode switch       <-UDP: frame acks------   guidance engine (pure logic)
  volume dial (MCP3008)      --WebSocket: controls-->  session state + shopping list
  headphones (I2S DAC)       <-WebSocket: cues------   Piper TTS clips, debug view, logs
@@ -81,6 +81,7 @@ Run `slr list classes` to see valid item names. Spoken names live in `config/cla
 | `slr server` | laptop server for the real device |
 | `slr device` | run the device (on the Pi; `--sim` for laptop backends) |
 | `slr device test-controls` | live readings of buttons, mode switch and volume dial (FR-76) |
+| `slr device test-camera` | open the camera and save one frame to `data/camera_test.jpg` |
 | `slr device calibrate-volume` | record dial min / middle / max (FR-44) |
 | `slr list show / add / remove / clear / reset / classes` | shopping list (FR-3, FR-6) |
 | `slr bench` | latency, FPS and UDP loss; compares resolutions (FR-75) |
@@ -96,12 +97,12 @@ Session logs (frames, detections, state changes, cues, latency, loss) go to `dat
 
 ## Raspberry Pi setup
 
-Hardware: Pi Zero 2 W, Raspberry Pi OS Lite 64-bit, Camera Module 3 (Wide recommended) on the
-22-pin Zero ribbon, PCM5102A-type I2S DAC with 3.5 mm jack, MCP3008 ADC (SPI).
+Hardware: Pi Zero 2 W, Raspberry Pi OS Lite 64-bit, USB UVC webcam (640x480 capable),
+TLV320DAC3100 I2S DAC with 3.5 mm jack, MCP3008 ADC (SPI).
 
 ```bash
 git clone https://github.com/Ore-Porat/VisuallyImpairedBodycam.git && cd VisuallyImpairedBodycam
-sudo ./deploy/install_pi.sh     # apt deps, venv, SPI + I2S, sudoers for shutdown, systemd service
+sudo ./deploy/install_pi.sh     # apt deps, venv, SPI + I2C + I2S, sudoers, systemd service
 sudo reboot
 ```
 
@@ -110,7 +111,11 @@ hotspot: usually `192.168.137.1`; Linux NetworkManager hotspot: `10.42.0.1`), or
 it via mDNS. The service `slr-device` starts on boot and says "Starting up", then "Ready" once
 connected (FR-50).
 
-No ML runtime is ever installed on the Pi.
+After rebooting, `i2cdetect -y 1` should show the DAC at address `18`, and
+`v4l2-ctl --list-devices` should list the USB camera. `aplay -l` should show the I2S sound card.
+
+No ML runtime is ever installed on the Pi: OpenCV reads the USB camera, and YOLO detection
+still runs on the laptop.
 
 ### Wiring (BCM numbering, set in `config/controls.yaml`)
 
@@ -120,12 +125,15 @@ No ML runtime is ever installed on the Pi.
 | Film advance lever | GPIO 27 to GND | momentary |
 | Rewind knob | GPIO 22 to GND | momentary |
 | Mode switch wire a / b | GPIO 5 / GPIO 6 | contact closed = 1. OFF=00, ON=11, TOGGLE=01. Flip `invert` if reversed |
+| USB camera | any USB port (OTG adapter on the Zero 2 W) | appears as `/dev/video0`; set `camera.index` if it is a different number |
 | MCP3008 | CLK GPIO 11, DOUT GPIO 9 (MISO), DIN GPIO 10 (MOSI), CS GPIO 8 (CE0); VDD + VREF 3.3 V, AGND + DGND to GND | SPI0, channel CH0 |
 | Volume dial | divider: 3.3 V, 5.6k fixed, dial, GND; midpoint to CH0 | any fixed resistor works, calibration handles it |
-| I2S DAC | GPIO 18, 19, 21 (+ 3.3 V, GND) | `dtoverlay=hifiberry-dac` |
+| I2S DAC (TLV320DAC3100) | BCK GPIO 18, WSEL GPIO 19, DIN GPIO 21, SDA GPIO 2, SCL GPIO 3, RST GPIO 4 (+ 3.3 V, GND) | `dtoverlay=i2s-dac`; no MCLK wire |
 | Fallback volume buttons | GPIO 23 / 24 | used only if the MCP3008 can't be read (FR-46) |
 
-Verify everything with `slr device test-controls`.
+Verify the hardware with `slr device test-controls` (buttons/switch/dial) and
+`slr device test-camera` (saves one camera frame to `data/camera_test.jpg`). If the USB camera is
+not `/dev/video0`, run `v4l2-ctl --list-devices` and set `camera.index` in `config/device.yaml`.
 
 ### Calibration
 

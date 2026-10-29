@@ -5,13 +5,14 @@ WHAT THIS FILE DOES
 Gives the rest of the device ONE simple way to grab a picture: ``camera.capture()`` returns the
 newest image the camera has. Three interchangeable "backends" implement that:
 
-- picamera2: Pi Camera Module 3 on the Pi Zero 2 W (install python3-picamera2 via apt).
-- opencv: laptop webcam for sim mode. A background thread keeps only the latest frame.
+- opencv: the Pi's USB webcam (default) and the laptop webcam in sim mode. A background
+  thread keeps only the latest frame.
+- picamera2: an optional CSI Camera Module (install python3-picamera2 via apt).
 - file: a video file, an image, or a folder of images, looped. For bench and headless tests.
 
 It also provides a JPEG encoder (turning an image into a small compressed byte string so it can
-be sent over the network). JPEG encoding prefers simplejpeg (fast, small, ships with picamera2),
-then OpenCV, then Pillow, so the Pi never needs an ML runtime.
+be sent over the network). JPEG encoding prefers simplejpeg (fast and small), then OpenCV, then
+Pillow, so the Pi never needs an ML runtime.
 
 HOW IT FITS IN
 --------------
@@ -39,6 +40,7 @@ WORDS YOU WILL SEE
 from __future__ import annotations
 
 import logging
+import sys
 import threading
 import time
 from pathlib import Path
@@ -100,7 +102,7 @@ class Picamera2Camera:
 
 
 class OpenCVCamera:
-    """A normal USB / built-in webcam, through OpenCV (sim mode on a laptop).
+    """A USB UVC webcam on the Pi, or the laptop webcam in sim mode, through OpenCV.
 
     Webcams buffer several frames internally, so a naive ``read()`` can return an old picture.
     To avoid that, a background thread reads frames as fast as the webcam produces them and
@@ -108,13 +110,23 @@ class OpenCVCamera:
     """
 
     def __init__(self, index: int, width: int, height: int):
-        """``index`` is the webcam number (0 = first camera); width/height the wanted size."""
+        """``index`` is the webcam number (0 = /dev/video0); width/height the wanted size."""
         import cv2
 
         self.cv2 = cv2
-        self.cap = cv2.VideoCapture(index)
+        # Prefer the Linux V4L2 backend: it talks to /dev/videoN directly and skips OpenCV's
+        # GStreamer/FFmpeg probes, which can be slow or pick the wrong device on a Pi.
+        backend = getattr(cv2, "CAP_V4L2", cv2.CAP_ANY) if sys.platform.startswith("linux") else cv2.CAP_ANY
+        self.cap = cv2.VideoCapture(index, backend)
+        if not self.cap.isOpened() and backend != cv2.CAP_ANY:
+            self.cap.release()
+            self.cap = cv2.VideoCapture(index)   # fall back to OpenCV's auto-detection
         if not self.cap.isOpened():
-            raise CameraError(f"could not open webcam {index}")
+            raise CameraError(
+                f"could not open USB camera {index} "
+                f"(check /dev/video{index}; run `v4l2-ctl --list-devices`)")
+        # Ask the driver to keep only a frame or two; the reader thread discards stale frames.
+        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
         self.size = (width, height)
@@ -128,7 +140,9 @@ class OpenCVCamera:
         # Make sure the webcam actually delivers pictures before declaring success.
         if self._wait_frame(after=0, timeout=5.0) is None:
             self.close()
-            raise CameraError(f"webcam {index} opened but gave no frames")
+            raise CameraError(
+                f"USB camera {index} opened but gave no frames "
+                f"(check /dev/video{index} with `v4l2-ctl --list-devices`)")
 
     def _reader(self) -> None:
         """Background loop: keep reading frames, store the latest, wake anyone waiting."""
@@ -152,21 +166,24 @@ class OpenCVCamera:
         None if nothing arrived in time. ``lambda:`` defines a tiny one-line function in place.
         """
         with self._cond:
-            self._cond.wait_for(lambda: self._seq > after, timeout)
-            return None if self._latest is None else self._latest.copy()
+            if not self._cond.wait_for(lambda: self._seq > after, timeout):
+                return None
+            return self._latest.copy()
 
     def capture(self) -> np.ndarray:
         """Return a frame that is newer than the previous capture (never a stale one)."""
         # wait for a frame newer than the one we already have, so it is never stale
-        frame = self._wait_frame(after=self._seq, timeout=1.0)
+        frame = self._wait_frame(after=self._seq, timeout=2.0)
         if frame is None:
-            raise CameraError("webcam stopped delivering frames")
+            raise CameraError("USB camera stopped delivering frames (check its USB cable)")
         return frame
 
     def close(self) -> None:
         """Stop the reader thread and release the webcam."""
         self._running = False
         self.cap.release()
+        if self._thread.is_alive():
+            self._thread.join(timeout=1.0)
 
 
 class FileCamera:

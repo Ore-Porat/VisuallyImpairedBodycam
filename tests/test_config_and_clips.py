@@ -42,7 +42,7 @@ def test_shipped_configs_load():
     d = load_device_config()
     c = load_controls_config()
     assert s.network.udp_port == 8766 and s.network.ws_port == 8765
-    assert d.camera.backend == "picamera2"
+    assert d.camera.backend == "opencv"
     assert c.mode_switch.positions == {"00": "off", "11": "on", "01": "toggle"}
     # s.path() turns a repo-relative path from the config into an absolute one.
     assert s.path("data/x") == ROOT / "data" / "x"
@@ -52,6 +52,7 @@ def test_sim_overlay():
     """The 'sim:' section of device.yaml overrides only the keys it lists."""
     d = load_device_config(sim=True)
     assert d.camera.backend == "opencv"
+    assert d.audio.dac == "none"
     assert d.server.host == "127.0.0.1"
     assert d.volume.source == "keyboard"
     assert d.streaming.max_fps == 10  # untouched keys survive the merge

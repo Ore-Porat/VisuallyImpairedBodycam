@@ -290,9 +290,10 @@ class DeviceServerConfig(_Model):
 
 class CameraConfig(_Model):
     """``camera:`` block of device.yaml."""
-    # picamera2 = the Pi camera; opencv = a USB webcam; file = a video or folder of images.
-    backend: Literal["picamera2", "opencv", "file"] = "picamera2"
-    # Which webcam (opencv backend only).
+    # opencv = USB webcam (default on the Pi) or laptop webcam; picamera2 = optional CSI
+    # Camera Module; file = a video or folder of images.
+    backend: Literal["picamera2", "opencv", "file"] = "opencv"
+    # Which webcam (opencv backend only): 0 = /dev/video0, and so on.
     index: int = 0
     # Video file / image folder (file backend only).
     file: str | None = None
@@ -325,6 +326,8 @@ class AudioConfig(_Model):
     """``audio:`` block of device.yaml: how clips are played."""
     # sounddevice = the Python audio library; aplay = the Linux command-line player; null = silent.
     backend: Literal["sounddevice", "aplay", "null"] = "sounddevice"
+    # tlv320dac3100 = reset/configure the I2C codec at startup; none = a DAC that needs no setup.
+    dac: Literal["tlv320dac3100", "none"] = "tlv320dac3100"
     # Output device name or number; None = system default.
     device: str | int | None = None
     sample_rate: int = 22050
@@ -541,8 +544,8 @@ def read_yaml(path: Path) -> dict[str, Any]:
 def deep_merge(base: dict, overlay: dict) -> dict:
     """Return ``base`` with ``overlay`` applied on top, merging nested dictionaries key by key.
 
-    Example: base ``{"camera": {"backend": "picamera2", "width": 640}}`` plus overlay
-    ``{"camera": {"backend": "opencv"}}`` gives ``{"camera": {"backend": "opencv", "width": 640}}``.
+    Example: base ``{"camera": {"backend": "opencv", "width": 640}}`` plus overlay
+    ``{"camera": {"backend": "file"}}`` gives ``{"camera": {"backend": "file", "width": 640}}``.
     Used for the ``sim:`` overrides in device.yaml. Neither input is modified.
     """
     out = dict(base)

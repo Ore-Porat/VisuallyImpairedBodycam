@@ -71,6 +71,7 @@ class DeviceApp:
         self.sim = sim
         self.session_id = random.getrandbits(32)  # new per boot (PRD 7.1)
         self.camera = camera
+        self.dac = None                        # TLV320DAC3100 setup, if the board has one
         self.loop: asyncio.AbstractEventLoop | None = None
         self.stopping = asyncio.Event()        # set when it is time to exit ``run``
         self.controls = None
@@ -117,11 +118,23 @@ class DeviceApp:
     async def run(self) -> None:
         """Start everything in order, then wait until shutdown is requested.
 
-        Order: audio first (so "Starting up" plays immediately), then find the server, open
-        the camera, create the frame sender and control client, start the controls and volume,
-        and finally hand over to the control client's reconnect loop.
+        Order: configure the DAC (if present), then audio (so "Starting up" plays immediately),
+        find the server, open the camera, create the frame sender and control client, start the
+        controls and volume, and finally hand over to the control client's reconnect loop.
         """
         self.loop = asyncio.get_running_loop()
+        # The TLV320DAC3100 needs its I2C registers configured before ALSA can play through it.
+        # On a laptop (sim) there is no DAC; if the setup fails, keep running and let the normal
+        # audio backend report the problem, so buttons and the camera still work.
+        if not self.sim and self.cfg.audio.dac == "tlv320dac3100":
+            try:
+                from slr.device.dac import Tlv320Dac
+
+                self.dac = await self.loop.run_in_executor(
+                    None, Tlv320Dac, self.cfg.audio.sample_rate)
+                log.info("TLV320DAC3100 configured at %d Hz", self.cfg.audio.sample_rate)
+            except Exception as e:
+                log.warning("TLV320 DAC setup failed (%s); audio may be silent", e)
         self.audio = AudioPlayer(self.cfg.audio, on_started=self._on_cue_started)
         self._apply_volume(self.volume_level)
         self.play_local("starting_up")
@@ -228,6 +241,9 @@ class DeviceApp:
         if self.camera is not None and hasattr(self.camera, "close"):
             self.camera.close()
         self.audio.close()
+        if self.dac is not None:
+            self.dac.close()
+            self.dac = None
 
     # ------------------------------------------------------------------ controls
 

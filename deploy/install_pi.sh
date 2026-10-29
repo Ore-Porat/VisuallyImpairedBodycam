@@ -3,12 +3,13 @@
 # Run from the repo root on the Pi:   sudo ./deploy/install_pi.sh
 #
 # Never installs an ML runtime (PRD rule 4): no torch, ultralytics or OpenCV DNN on the Pi.
+# OpenCV itself is installed only to read the USB camera; detection stays on the laptop.
 #
 # What this script does, in order
 #   1. installs the system packages the device needs (camera, GPIO, audio libraries)
-#   2. turns on the SPI bus (for the volume dial chip) and the I2S audio output (headphones)
+#   2. turns on the SPI bus (volume dial), I2C (TLV320 DAC setup) and I2S audio output
 #   3. creates a Python "virtual environment" and installs this project into it
-#   4. gives the normal user permission to use GPIO, SPI, audio and the camera
+#   4. gives the normal user permission to use GPIO, SPI, I2C, audio and the camera
 #   5. lets the device power itself off without a password (for the shutdown button combo)
 #   6. installs a systemd service so the software starts on every boot (FR-50)
 # FR-xx / PRD references point to the product spec, PRD.pdf.
@@ -38,39 +39,44 @@ CONFIG=/boot/firmware/config.txt
 [[ -f $CONFIG ]] || CONFIG=/boot/config.txt
 
 # apt is the package manager on Raspberry Pi OS (Debian). "update" refreshes the package
-# list; "install" fetches: Python venv/pip tooling, the picamera2 camera library, lgpio for
-# GPIO access, PortAudio + ALSA utilities for sound, numpy, and simplejpeg for fast JPEG
-# compression. picamera2 only comes from apt, which is why the venv below can see system packages.
+# list; "install" fetches: Python venv/pip tooling, OpenCV for the USB camera, lgpio for
+# GPIO access, I2C tools for the DAC, PortAudio + ALSA utilities for sound, numpy, and
+# simplejpeg for fast JPEG compression. OpenCV and the other binary packages only come
+# from apt, which is why the venv below can see system packages.
 echo "== apt packages"
 apt-get update
-apt-get install -y python3-venv python3-pip python3-picamera2 python3-lgpio \
-  libportaudio2 alsa-utils python3-numpy python3-simplejpeg
+apt-get install -y python3-venv python3-pip python3-opencv python3-lgpio \
+  libportaudio2 alsa-utils i2c-tools python3-smbus python3-numpy python3-simplejpeg v4l-utils
 
 # The Pi's hardware features are switched on in config.txt, read by the firmware at boot.
-#   raspi-config nonint do_spi 0  -> enable the SPI bus (the MCP3008 volume dial chip)
-#   dtoverlay=hifiberry-dac        -> enable the I2S digital audio output for the DAC board
+#   raspi-config nonint do_spi 0  -> enable SPI (the MCP3008 volume dial chip)
+#   raspi-config nonint do_i2c 0  -> enable I2C (the TLV320 DAC's control bus)
+#   dtoverlay=i2s-dac             -> generic I2S output; correct for the TLV320DAC3100
 #     (only appended if the line is not already there, so re-running is safe)
-echo "== enable SPI (MCP3008 volume dial) and the I2S DAC (headphone jack)"
+echo "== enable SPI (MCP3008), I2C (TLV320), and the I2S DAC (headphone jack)"
 raspi-config nonint do_spi 0 || true
-grep -q '^dtoverlay=hifiberry-dac' "$CONFIG" || echo 'dtoverlay=hifiberry-dac' >> "$CONFIG"
+raspi-config nonint do_i2c 0 || true
+# Remove the old PCM5102A/HifiBerry overlay if a previous install added it.
+sed -i '/^dtoverlay=hifiberry-dac/d' "$CONFIG"
+grep -q '^dtoverlay=i2s-dac' "$CONFIG" || echo 'dtoverlay=i2s-dac' >> "$CONFIG"
 # the Zero 2 W has no analog audio; make sure the onboard HDMI audio doesn't grab card 0
 sed -i 's/^dtparam=audio=on/dtparam=audio=off/' "$CONFIG"
 
 # A virtual environment (venv) is a private Python install inside the repo (.venv/) so this
 # project's packages do not interfere with the system's. --system-site-packages lets it
-# also use the apt-installed libraries (picamera2 etc.). "sudo -u" runs the commands as the
+# also use the apt-installed libraries (OpenCV etc.). "sudo -u" runs the commands as the
 # normal user so the files are owned by them, not by root.
 # `pip install -e ".[device]"` installs this repo in "editable" mode with the "device"
 # extras from pyproject.toml (no machine-learning packages).
-echo "== Python venv (system site packages so picamera2 from apt is visible)"
+echo "== Python venv (system site packages so apt libraries are visible)"
 sudo -u "$RUN_USER" python3 -m venv --system-site-packages "$REPO/.venv"
 sudo -u "$RUN_USER" "$REPO/.venv/bin/pip" install --upgrade pip
 sudo -u "$RUN_USER" "$REPO/.venv/bin/pip" install -e "$REPO[device]"
 
 # On Linux, access to hardware is controlled by group membership. Add the user to the
-# groups that own the GPIO pins, the SPI bus, the sound card and the camera.
-echo "== groups for GPIO / SPI / audio"
-usermod -aG gpio,spi,audio,video "$RUN_USER"
+# groups that own the GPIO pins, the SPI/I2C buses, the sound card and the camera.
+echo "== groups for GPIO / SPI / I2C / audio / camera"
+usermod -aG gpio,spi,i2c,audio,video "$RUN_USER"
 
 # "sudoers" is the file that says who may run what as root. This rule lets the user run
 # ONLY the shutdown command without a password, so the shutter+advance combo can power
@@ -99,7 +105,9 @@ fi
 echo
 echo "Done. Next:"
 echo "  1. set server.host in $REPO/config/device.yaml to the laptop's hotspot address"
-echo "  2. reboot (needed for the I2S overlay), then check: aplay -l ; ls /dev/spidev0.0"
-echo "  3. slr device test-controls      # verify wiring"
-echo "  4. slr device calibrate-volume   # FR-44"
-echo "  5. sudo systemctl start slr-device ; journalctl -u slr-device -f"
+echo "  2. reboot (needed for the overlays), then check:"
+echo "       aplay -l ; ls /dev/spidev0.0 ; i2cdetect -y 1 ; v4l2-ctl --list-devices"
+echo "  3. slr device test-controls      # verify buttons/switch/dial wiring"
+echo "  4. slr device test-camera        # open the USB camera and save one frame"
+echo "  5. slr device calibrate-volume   # FR-44"
+echo "  6. sudo systemctl start slr-device ; journalctl -u slr-device -f"

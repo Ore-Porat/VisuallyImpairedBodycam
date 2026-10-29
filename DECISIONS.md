@@ -59,8 +59,10 @@ Choices made where the PRD (`PRD.pdf`) was ambiguous or left room (PRD rule 7). 
 - Default `device.yaml` volume calibration is computed from the measured resistances with a 5.6k divider read by a 10-bit MCP3008 at VREF 3.3 V: 464 / 531 / 569 counts.
 
 ## Device
-- Camera stays started while idle (restarting picamera2 takes about 1 s); frames are only captured and sent while streaming (FR-54, NFR-12).
-- JPEG encoding uses simplejpeg on the Pi (ships with picamera2), then OpenCV, then Pillow.
+- Camera is a USB UVC webcam read through OpenCV (the `opencv` backend is the default); the CSI `picamera2` backend remains available but is no longer installed by `install_pi.sh`.
+- Camera stays started while idle (reopening a USB camera takes about 1 s); frames are only captured and sent while streaming (FR-54, NFR-12).
+- JPEG encoding uses simplejpeg on the Pi, then OpenCV, then Pillow.
+- The DAC is a TLV320DAC3100 configured over I2C at startup (`audio.dac: tlv320dac3100`). `dtoverlay=i2s-dac` supplies the generic I2S clocks; `audio.dac: none` is for a DAC that needs no setup.
 - Reconnect backoff is 0.5 s doubling to 4 s, well inside the 10 s recovery target (NFR-10).
 - Shutdown runs `sudo shutdown -h now` (allowed by a sudoers rule from `install_pi.sh`); in sim it just exits.
 
