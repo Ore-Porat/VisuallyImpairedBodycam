@@ -104,6 +104,10 @@ guidance:
 
   # Maximum frames per second the device is asked to stream.
   stream_max_fps: 10
+  # Keep the camera live while the mode switch is ON, even before a search starts.
+  # The model still runs on these frames, so the debug view shows boxes, but no search,
+  # guidance speech or tones start until Identify (burst) or Enter is used.
+  stream_in_idle: true
 
 # Text-to-speech: how sentences from config/phrases.yaml become audio clips.
 tts:

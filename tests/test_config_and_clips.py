@@ -42,6 +42,7 @@ def test_shipped_configs_load():
     d = load_device_config()
     c = load_controls_config()
     assert s.network.udp_port == 8766 and s.network.ws_port == 8765
+    assert s.guidance.stream_in_idle is True
     assert d.camera.backend == "opencv"
     assert c.mode_switch.positions == {"00": "off", "11": "on", "01": "toggle"}
     # s.path() turns a repo-relative path from the config into an absolute one.

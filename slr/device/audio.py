@@ -55,6 +55,7 @@ from __future__ import annotations
 
 import logging
 import math
+import shutil
 import subprocess
 import threading
 import time
@@ -453,15 +454,21 @@ class NullBackend:
 def make_backend(cfg: AudioConfig, on_done: Callable[[int], None]):
     """Pick the backend named in config/device.yaml (``audio.backend``).
 
-    If the real sound card cannot be opened the device keeps running silently rather than
-    crashing, because the buttons and camera are still useful.
+    If ``sounddevice`` cannot be opened, try ``aplay`` (speech only; guidance tones need
+    sounddevice). If neither works, keep running silently rather than crashing, because the
+    buttons and camera are still useful.
     """
     if cfg.backend == "sounddevice":
         # try/except: attempt the risky thing; if it raises an error, run the except block.
         try:
             return SoundDeviceBackend(cfg, on_done)
         except Exception as e:
-            log.error("sounddevice audio failed (%s); falling back to no audio", e)
+            if shutil.which("aplay"):
+                log.error(
+                    "sounddevice audio failed (%s); falling back to aplay "
+                    "(guidance tones will be silent)", e)
+                return AplayBackend(cfg, on_done)
+            log.error("sounddevice audio failed (%s); no aplay; falling back to no audio", e)
             return NullBackend(cfg, on_done)
     if cfg.backend == "aplay":
         return AplayBackend(cfg, on_done)

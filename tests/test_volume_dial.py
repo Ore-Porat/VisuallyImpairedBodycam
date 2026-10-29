@@ -5,7 +5,7 @@ What is a test file?
     behavior and fails loudly if it is wrong.
 
 What is being tested here?
-    The volume knob is a potentiometer read through an MCP3008 analog-to-digital chip,
+    The volume knob is a potentiometer read through an MCP3002 analog-to-digital chip,
     which gives a "raw count" (an integer). ``slr/device/volume_dial.py`` turns that
     noisy count into a volume level 0..10 and an audio gain:
       * ``VolumeCurve``  maps raw count -> dial position 0.0..1.0 using three calibration
@@ -20,7 +20,7 @@ What is being tested here?
 
 Words you will see:
     raw count     The integer the ADC chip returns (the test calibration uses 16-bit
-                  style numbers around 24000..29000; the real MCP3008 gives 0..1023).
+                  style numbers around 24000..29000; the real MCP3002 gives 0..1023).
     hysteresis    Requiring a bit of extra movement before changing state, to avoid
                   flicker at a boundary.
     pytest.approx "Equal, allowing for tiny floating-point rounding differences."

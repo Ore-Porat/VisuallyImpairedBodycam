@@ -663,6 +663,7 @@ def test_mode_on_from_standby_says_ready():
     assert d.s.mode == Mode.STANDBY
     fx = d.control("mode_on")
     assert keys(fx) == ["ready"] and d.s.mode == Mode.IDLE
+    assert streams(fx) == []  # stream_in_idle defaults off
 
 
 def test_mode_on_while_active_is_ignored():
@@ -670,6 +671,67 @@ def test_mode_on_while_active_is_ignored():
     d = searching_driver()
     assert d.control("mode_on") == []
     assert d.s.mode == Mode.SEARCHING
+
+
+def test_mode_on_can_start_idle_stream():
+    """With stream_in_idle, switch ON starts live video but not a search or guidance audio."""
+    cfg = GuidanceConfig(tones_enabled=False, stream_in_idle=True)
+    d = Driver(state=g.initial_state(items("pasta")), cfg=cfg)
+    fx = d.control("mode_on")
+    assert keys(fx) == ["ready"]
+    assert streams(fx) == [Stream(on=True, purpose="find")]
+    assert d.s.mode == Mode.IDLE and d.s.target is None
+    # The detector may still run on frames, but IDLE produces no spoken guidance.
+    assert d.frames(5, det()) == []
+
+
+def test_stopping_search_keeps_idle_stream_when_enabled():
+    """Cancel/stop returns to IDLE with video still live; mode_off turns it off."""
+    cfg = GuidanceConfig(tones_enabled=False, stream_in_idle=True)
+    d = Driver(state=g.initial_state(items("pasta")), cfg=cfg)
+    d.control("mode_on")
+    d.control("enter")
+    fx = d.control("enter")
+    assert keys(fx) == ["search_stopped"]
+    assert Stream(on=True, purpose="find") in fx
+    assert d.s.mode == Mode.IDLE
+    fx = d.control("mode_off")
+    assert Stream(on=False) in fx
+    assert d.s.mode == Mode.STANDBY
+
+
+def test_next_item_keeps_idle_stream_when_enabled():
+    """Browsing the list while ON does not interrupt the live video."""
+    cfg = GuidanceConfig(tones_enabled=False, stream_in_idle=True)
+    d = Driver(state=g.initial_state(items("pasta", "coffee")), cfg=cfg)
+    d.control("mode_on")
+    fx = d.control("next_item")
+    assert keys(fx) == ["item_announce"]
+    assert Stream(on=True, purpose="find") in fx
+
+
+def test_check_off_keeps_idle_stream_when_enabled():
+    """Checking off an item returns to IDLE without stopping the live video."""
+    cfg = GuidanceConfig(tones_enabled=False, stream_in_idle=True)
+    state = replace(g.initial_state(items("pasta", "coffee")),
+                    mode=Mode.WITHIN_REACH, target="pasta")
+    d = Driver(state=state, cfg=cfg)
+    fx = d.control("enter")
+    assert Stream(on=True, purpose="find") in fx
+    assert d.s.mode == Mode.IDLE and d.s.target is None
+
+
+def test_identify_from_idle_restarts_idle_stream_when_enabled():
+    """The identify burst briefly changes purpose, then resumes the live idle stream."""
+    cfg = GuidanceConfig(tones_enabled=False, stream_in_idle=True)
+    d = Driver(state=g.initial_state(items("pasta")), cfg=cfg)
+    d.control("mode_on")
+    d.control("identify")
+    b = d.s.identify.burst_id
+    for _ in range(5):
+        fx = d.send(frame(det("rice", 0.8), purpose="identify", burst_id=b), 0.1)
+    assert d.s.mode == Mode.IDLE
+    assert Stream(on=True, purpose="find") in fx
 
 
 def test_only_mode_switch_works_in_standby():

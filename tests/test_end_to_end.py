@@ -57,6 +57,8 @@ def configs(tmp_path):
     scfg.network.host = "127.0.0.1"
     scfg.network.mdns = False
     scfg.tts.engines = ["beep"]
+    # This test checks the on-demand stream; the shipped config uses live idle video.
+    scfg.guidance.stream_in_idle = False
     # Keep every file the server writes inside the throw-away temporary folder.
     scfg.paths.shopping_list = str(tmp_path / "list.yaml")
     scfg.paths.clips_dir = str(tmp_path / "clips")

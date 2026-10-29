@@ -57,17 +57,18 @@ audio:
   sample_rate: 22050     # samples per second; matches the Piper voice clips
   blocksize: 512         # audio buffer size in samples (smaller = lower delay, more CPU)
 
-# The volume knob. It is a potentiometer read through an MCP3008 analog-to-digital chip
+# The volume knob. It is a potentiometer read through an MCP3002 analog-to-digital chip
 # over SPI. "buttons" uses the two fallback GPIO buttons; "keyboard" is for sim mode.
 volume:
   source: adc            # adc | buttons | keyboard
   adc:
-    spi_bus: 0           # MCP3008 on SPI0
+    spi_bus: 0           # MCP3002 on SPI0
     spi_device: 0        # chip select: 0 = CE0 (GPIO 8), 1 = CE1 (GPIO 7)
-    channel: 0           # CH0
+    channel: 0           # CH0 or CH1 (the MCP3002 has two inputs)
     max_speed_hz: 1000000   # SPI clock speed (1 MHz)
-  # Raw MCP3008 counts (0..1023) at dial min / middle / max (FR-44). Defaults are computed from
-  # the measured 4.64k / 6.04k / 7.0k dial with a 5.6k fixed resistor, VREF = VDD = 3.3 V.
+  # Raw MCP3002 counts (0..1023) at dial min / middle / max (FR-44). Defaults are computed from
+  # the measured 4.64k / 6.04k / 7.0k dial with a 5.6k fixed resistor and VDD = 3.3 V.
+  # The MCP3002 uses VDD as its reference (it has no separate VREF pin).
   # Re-run `slr device calibrate-volume` on the real hardware.
   calibration:
     raw_min: 464

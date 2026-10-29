@@ -48,7 +48,7 @@ server = [
 ]
 # Raspberry Pi Zero 2 W. No ML runtimes here (PRD rule 4). OpenCV comes from apt.
 #   gpiozero / lgpio  reading buttons and the mode switch
-#   spidev            talking to the MCP3008 volume-dial chip over SPI
+#   spidev            talking to the MCP3002 volume-dial chip over SPI
 #   simplejpeg        fast JPEG compression of camera frames
 #   adafruit-blinka   board I2C pins; adafruit-circuitpython-tlv320 configures the DAC
 #   The "; platform_..." parts mean "only on that kind of machine" (64-bit ARM / Linux).

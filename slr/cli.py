@@ -9,7 +9,8 @@ in a terminal, Python starts here. The file does three things:
    (and print ``--help`` text).
 2. The ``cmd_*`` functions each carry out one command by loading the config files and calling
    into the real code in slr/server, slr/device, slr/sim.py, slr/bench.py.
-3. Two hardware helpers for the Raspberry Pi: ``calibrate_volume`` and ``test_controls``.
+3. Hardware helpers for the Raspberry Pi: ``calibrate_volume``, ``test_adc``,
+   ``test_controls`` and ``test_camera``.
 
 The README's "Command reference" table lists what each command is for.
 
@@ -28,7 +29,7 @@ Words you will see
 - stderr: the terminal's separate channel for error messages (``file=sys.stderr``).
 - sys.exit(2): stop the program with exit code 2, which scripts can read as "bad input".
 - raise SystemExit("msg"): same as printing the message and exiting with an error.
-- GPIO: the Raspberry Pi's input/output pins; ADC / MCP3008: the chip that reads the volume
+- GPIO: the Raspberry Pi's input/output pins; ADC / MCP3002: the chip that reads the volume
   dial; FR-xx: requirement numbers from the product spec, PRD.pdf.
 - regular expression (re): a pattern language for finding text, used here to find
   ``raw_min: 464`` lines in device.yaml and replace just the number.
@@ -101,7 +102,7 @@ def cmd_server(args) -> None:
 
 
 def cmd_device(args) -> None:
-    """``slr device [run|calibrate-volume|test-controls|test-camera]``: run the device or a tool."""
+    """``slr device [run|calibrate-volume|test-controls|test-camera|test-adc]``: run a device tool."""
     dcfg = load_device_config(args.config_dir, sim=args.sim)
     ccfg = load_controls_config(args.config_dir)
     if args.action == "run":
@@ -114,6 +115,8 @@ def cmd_device(args) -> None:
         test_controls(dcfg, ccfg)
     elif args.action == "test-camera":
         test_camera(dcfg)
+    elif args.action == "test-adc":
+        test_adc(dcfg)
 
 
 def cmd_list(args) -> None:
@@ -291,12 +294,12 @@ def calibrate_volume(dcfg, config_dir: Path) -> None:
     """
     import statistics
 
-    from slr.device.volume_dial import Mcp3008Reader
+    from slr.device.volume_dial import Mcp3002Reader
 
     try:
-        reader = Mcp3008Reader(dcfg.volume.adc)
+        reader = Mcp3002Reader(dcfg.volume.adc)
     except Exception as e:
-        raise SystemExit(f"cannot read the MCP3008: {e}")
+        raise SystemExit(f"cannot read the MCP3002: {e}")
     points = {}
     for key, label in (("raw_min", "MINIMUM"), ("raw_mid", "the MIDDLE"), ("raw_max", "MAXIMUM")):
         # input() pauses until the user presses Enter.
@@ -353,15 +356,46 @@ def test_camera(dcfg) -> None:
     print(f"saved one frame to {out}")
 
 
+def test_adc(dcfg) -> None:
+    """Read the MCP3002 volume dial and show the raw SPI bytes, count and voltage.
+
+    This needs only SPI, not GPIO or the camera, so it is the quickest way to check the dial
+    divider and wiring. Turn the knob through its full range; the min/max values show whether
+    the input is actually moving. Stop with Ctrl+C.
+    """
+    from slr.device.volume_dial import Mcp3002Reader
+
+    try:
+        reader = Mcp3002Reader(dcfg.volume.adc)
+    except Exception as e:
+        raise SystemExit(f"cannot read the MCP3002: {e}")
+    low, high = 1023, 0
+    print(f"MCP3002 on SPI{dcfg.volume.adc.spi_bus}.{dcfg.volume.adc.spi_device}, "
+          f"CH{dcfg.volume.adc.channel}. Turn the knob; Ctrl+C to stop.")
+    try:
+        while True:
+            raw = reader.read()
+            low, high = min(low, raw), max(high, raw)
+            volts = raw / 1023.0 * 3.3
+            print(f"\rrx={reader.rx_text()}  raw={raw:4d}  V={volts:.3f}  "
+                  f"range={low}-{high}", end="", flush=True)
+            time.sleep(0.1)
+    except KeyboardInterrupt:
+        print()
+    finally:
+        reader.close()
+
+
 def test_controls(dcfg, ccfg) -> None:
     """FR-76: live readings of every button, the mode switch and the volume dial.
 
     Prints one constantly-updating line in the terminal showing each button (DOWN/up), the two
-    mode switch wires and the decoded position, the raw dial reading, and any events the
-    button logic produced (short press, long press, ...). Stop with Ctrl+C.
+    mode switch wires and the decoded position, the raw dial reading with its SPI bytes and
+    voltage, and any events the button logic produced (short press, long press, ...). Stop with
+    Ctrl+C.
     """
     from slr.device.controls import GpioControls
-    from slr.device.volume_dial import Mcp3008Reader, VolumeCurve, VolumeFilter
+    from slr.device.volume_dial import Mcp3002Reader, VolumeCurve, VolumeFilter
 
     # The controls object reports events by calling a function we give it. ``events.append``
     # is that function here, so events simply pile up in this list until we print them.
@@ -373,7 +407,7 @@ def test_controls(dcfg, ccfg) -> None:
     ctl.start()
     # The dial is optional: if the ADC chip cannot be read, show everything else anyway.
     try:
-        reader = Mcp3008Reader(dcfg.volume.adc)
+        reader = Mcp3002Reader(dcfg.volume.adc)
         filt = VolumeFilter(VolumeCurve(dcfg.volume.calibration), dcfg.volume)
     except Exception as e:
         print(f"volume dial: not available ({e})")
@@ -388,18 +422,22 @@ def test_controls(dcfg, ccfg) -> None:
                 raw = reader.read()
                 # Feed the raw count through the same smoothing/levels logic the device uses.
                 filt.add_sample(raw, time.monotonic())
-                line += f" | dial raw={raw} pos={filt.last_position * 100:5.1f}% level={filt.level}"
+                volts = raw / 1023.0 * 3.3
+                line += (f" | dial raw={raw} rx={reader.rx_text()} V={volts:.3f} "
+                         f"pos={filt.last_position * 100:5.1f}% level={filt.level}")
             if events:
                 line += " | events: " + ", ".join(events)
                 events.clear()
             # "\r" moves the cursor back to the start of the line so the same line is
             # overwritten each time; ljust pads it so leftovers from a longer line are erased.
-            print("\r" + line.ljust(150), end="", flush=True)
+            print("\r" + line.ljust(180), end="", flush=True)
             time.sleep(0.05)
     except KeyboardInterrupt:
         print()
     finally:
         ctl.stop()
+        if reader is not None:
+            reader.close()
 
 
 # --------------------------------------------------------------------------- parser
@@ -434,7 +472,7 @@ def build_parser() -> argparse.ArgumentParser:
     # slr device [action]   (nargs="?" = the action is optional and defaults to "run")
     s = sub.add_parser("device", help="run the device, or device tools")
     s.add_argument("action", nargs="?", default="run",
-                   choices=["run", "calibrate-volume", "test-controls", "test-camera"])
+                   choices=["run", "calibrate-volume", "test-controls", "test-camera", "test-adc"])
     s.add_argument("--sim", action="store_true", help="use the sim overrides from device.yaml")
     s.set_defaults(func=cmd_device)
 

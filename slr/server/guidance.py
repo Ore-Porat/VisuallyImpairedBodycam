@@ -539,14 +539,28 @@ def _stop_tone(s: State) -> tuple[State, list[Effect]]:
     return replace(s, track=replace(s.track, tone=None)), [Tone(interval_ms=None)]
 
 
-def _leave_find(s: State) -> tuple[State, list[Effect]]:
-    """Stop any search / identify: stream off, tone off, tracking cleared."""
-    if not s.streaming:
+def _streaming_now(s: State, cfg: GuidanceConfig) -> bool:
+    """Whether the device has been asked to stream in this state.
+
+    ``State.streaming`` covers the on-demand modes. ``stream_in_idle`` additionally keeps
+    video flowing while the switch is ON and the engine is waiting in IDLE.
+    """
+    return s.streaming or (cfg.stream_in_idle and s.mode == Mode.IDLE)
+
+
+def _leave_find(s: State, cfg: GuidanceConfig, *, keep_stream: bool = False) -> tuple[State, list[Effect]]:
+    """Stop any search / identify: tone off, tracking cleared, and usually stream off.
+
+    ``keep_stream`` is used when returning to IDLE. If ``stream_in_idle`` is on, the camera
+    stays live; otherwise this behaves like the original on-demand stream.
+    """
+    if not _streaming_now(s, cfg):
         return s, []
     s, fx = _stop_tone(s)
     s = replace(s, target=None, track=Tracking(), other_history=(), identify=None,
                 search_ref=None, not_found_said_at=None)
-    return s, fx + [Stream(on=False)]
+    keep = keep_stream and cfg.stream_in_idle
+    return s, fx + [Stream(on=True, purpose="find") if keep else Stream(on=False)]
 
 
 def _start_search(s: State, target: str, now: float, cfg: GuidanceConfig) -> State:
@@ -571,15 +585,20 @@ def _on_control(s: State, ev: Control, now: float, cfg: GuidanceConfig) -> tuple
         return replace(s, volume=ev.value), []
     if e == "shutdown":
         # The device says "Shutting down" from a local clip and powers off by itself.
-        s, fx = _leave_find(s)
+        s, fx = _leave_find(s, cfg)
         return replace(s, mode=Mode.STANDBY), fx
     if e == "mode_off":
         # Mode switch flipped to OFF: stop everything and say "paused".
-        s, fx = _leave_find(s)
+        s, fx = _leave_find(s, cfg)
         return replace(s, mode=Mode.STANDBY), fx + [say("paused", interrupt=True)]
     if e == "mode_on":
         if s.mode == Mode.STANDBY:
-            return replace(s, mode=Mode.IDLE), [say("ready", interrupt=True)]
+            fx: list[Effect] = [say("ready", interrupt=True)]
+            if cfg.stream_in_idle:
+                # Start the live video now; the detector runs, but no search starts until
+                # the user presses Enter or triggers Identify.
+                fx.append(Stream(on=True, purpose="find"))
+            return replace(s, mode=Mode.IDLE), fx
         return s, []  # already active (e.g. TOGGLE springing back to ON)
 
     # --- everything below needs the device to be switched on ----------------------------
@@ -594,7 +613,7 @@ def _on_control(s: State, ev: Control, now: float, cfg: GuidanceConfig) -> tuple
         # Browse the list. Cancels any running search first.
         if not s.items:
             return s, [say("list_empty", interrupt=True)]
-        s, fx = _leave_find(s)
+        s, fx = _leave_find(s, cfg, keep_stream=True)
         step_by = 1 if e == "next_item" else -1
         # ``%`` wraps around: after the last item comes the first one again.
         s = replace(s, mode=Mode.IDLE, index=(s.index + step_by) % len(s.items))
@@ -634,14 +653,14 @@ def _on_enter(s: State, now: float, cfg: GuidanceConfig) -> tuple[State, list[Ef
         return s, [say("searching", interrupt=True, item=target),
                    Stream(on=True, purpose="find")]
     if s.mode in (Mode.SEARCHING, Mode.GUIDING):
-        s, fx = _leave_find(s)
+        s, fx = _leave_find(s, cfg, keep_stream=True)
         return replace(s, mode=Mode.IDLE), fx + [say("search_stopped", interrupt=True)]
     if s.mode == Mode.WITHIN_REACH:
         target = s.target
         # Build a new items tuple with the current item marked FOUND (all others unchanged).
         # ``enumerate`` gives (position, item) pairs.
         items = tuple(replace(it, status=FOUND) if i == s.index else it for i, it in enumerate(s.items))
-        s, fx = _leave_find(s)
+        s, fx = _leave_find(s, cfg, keep_stream=True)
         nxt = next_pending_index(items, s.index)
         if nxt is None:
             # Nothing left to find: stay on this item and celebrate.
@@ -686,7 +705,8 @@ def _finish_identify(s: State, now: float, cfg: GuidanceConfig) -> tuple[State, 
         return s, [cue, Stream(on=True, purpose="find")]
     s = replace(s, mode=Mode.IDLE if ident.resume != Mode.STANDBY else Mode.STANDBY,
                 identify=None, target=None)
-    return s, [cue, Stream(on=False)]
+    keep_stream = cfg.stream_in_idle and s.mode == Mode.IDLE
+    return s, [cue, Stream(on=True, purpose="find") if keep_stream else Stream(on=False)]
 
 
 def _on_frame(s: State, f: Frame, now: float, cfg: GuidanceConfig) -> tuple[State, list[Effect]]:

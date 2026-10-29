@@ -75,7 +75,7 @@ class DeviceApp:
         self.loop: asyncio.AbstractEventLoop | None = None
         self.stopping = asyncio.Event()        # set when it is time to exit ``run``
         self.controls = None
-        self.dial: DialThread | None = None    # the MCP3008 volume dial, if one was found
+        self.dial: DialThread | None = None    # the MCP3002 volume dial, if one was found
         self.step_volume: StepVolume | None = None   # fallback: +/- keys or two buttons
         self.volume_level = cfg.volume.initial_level
         self.system_dir = cfg.path(cfg.paths.system_clips)
@@ -197,9 +197,9 @@ class DeviceApp:
         vc = self.cfg.volume
         if vc.source == "adc":
             try:
-                from slr.device.volume_dial import Mcp3008Reader
+                from slr.device.volume_dial import Mcp3002Reader
 
-                reader = Mcp3008Reader(vc.adc)
+                reader = Mcp3002Reader(vc.adc)
                 filt = VolumeFilter(VolumeCurve(vc.calibration), vc)
                 # The dial thread reports levels from its own thread; the lambdas hop onto the
                 # event loop before touching the audio player.
@@ -210,7 +210,7 @@ class DeviceApp:
                 self.dial.start()
                 return False
             except Exception as e:
-                log.warning("no MCP3008 volume dial (%s); falling back to two volume buttons", e)
+                log.warning("no MCP3002 volume dial (%s); falling back to two volume buttons", e)
         # No dial: volume changes in steps from +/- keys (sim) or two physical buttons.
         self.step_volume = StepVolume(vc)
         self.step_volume.level = self.volume_level

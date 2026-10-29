@@ -1,4 +1,4 @@
-"""Volume dial: MCP3008 reading, calibration curve, filtering, hysteresis (FR-44, FR-45, FR-46).
+"""Volume dial: MCP3002 reading, calibration curve, filtering, hysteresis (FR-44, FR-45, FR-46).
 
 WHAT THIS FILE DOES
 -------------------
@@ -7,13 +7,13 @@ level into a loudness multiplier for the audio player. (FR-44..46 are requiremen
 the product spec, PRD.pdf: calibration, steady readings, and the fallback buttons.)
 
 The dial is a variable resistor (4.64k min, 6.04k middle, 7.0k max, roughly logarithmic) in a
-divider read by an MCP3008 (SPI). ``VolumeCurve`` maps raw counts to a 0..1 dial position through the
+divider read by an MCP3002 (SPI). ``VolumeCurve`` maps raw counts to a 0..1 dial position through the
 three calibration points; ``VolumeFilter`` turns noisy samples into a steady 0..10 level.
 Both are pure and unit tested.
 
 HOW IT FITS IN
 --------------
-``slr/device/main.py`` builds ``Mcp3008Reader`` + ``VolumeCurve`` + ``VolumeFilter`` and runs them
+``slr/device/main.py`` builds ``Mcp3002Reader`` + ``VolumeCurve`` + ``VolumeFilter`` and runs them
 on a ``DialThread``. The thread reports two things back: "apply this level now" (so the volume
 changes instantly) and, once the knob has stopped moving for a moment, "announce this level"
 (so the user hears "Volume 7" once, not ten times while turning). If there is no dial,
@@ -21,9 +21,10 @@ changes instantly) and, once the knob has stopped moving for a moment, "announce
 
 WORDS YOU WILL SEE
 ------------------
-- ADC: analogue-to-digital converter. The Pi cannot read a voltage directly; the MCP3008 chip
-  measures one and reports it as a number from 0 to 1023 ("raw counts", 10 bits).
-- SPI: a simple wiring scheme (4 wires) the Pi uses to talk to chips like the MCP3008.
+- ADC: analogue-to-digital converter. The Pi cannot read a voltage directly; the MCP3002 chip
+  measures one and reports it as a number from 0 to 1023 ("raw counts", 10 bits). The MCP3002
+  has two input channels (CH0 and CH1).
+- SPI: a simple wiring scheme (4 wires) the Pi uses to talk to chips like the MCP3002.
 - voltage divider: a fixed resistor and the dial in series between 3.3 V and ground. The
   voltage at the midpoint moves as the knob turns; that is what the ADC measures.
 - calibration: measuring the raw counts at the knob's minimum, middle and maximum once, so
@@ -239,17 +240,18 @@ class StepVolume:
         return None
 
 
-class Mcp3008Reader:
-    """10-bit MCP3008 on SPI (0..1023). Needs SPI enabled (/dev/spidevB.D).
+class Mcp3002Reader:
+    """10-bit MCP3002 on SPI (0..1023). Needs SPI enabled (/dev/spidevB.D).
 
     Talks to the chip through the ``spidev`` library. The constructor does one test read so a
     missing or mis-wired chip fails loudly at start-up (main.py then falls back to buttons).
+    The MCP3002 uses VDD as its voltage reference, so VDD must be 3.3 V on the Pi.
     """
 
     def __init__(self, cfg: AdcConfig):
-        """``cfg`` gives the SPI bus/device numbers, the channel (0..7) and the clock speed."""
-        if not 0 <= cfg.channel <= 7:
-            raise ValueError(f"MCP3008 channel must be 0..7, got {cfg.channel}")
+        """``cfg`` gives the SPI bus/device numbers, the channel (0 or 1) and the clock speed."""
+        if not 0 <= cfg.channel <= 1:
+            raise ValueError(f"MCP3002 channel must be 0 or 1, got {cfg.channel}")
         # Imported here so machines without spidev can still import this module.
         import spidev
 
@@ -258,18 +260,39 @@ class Mcp3008Reader:
         self.spi.max_speed_hz = cfg.max_speed_hz
         self.spi.mode = 0
         self.channel = cfg.channel
-        self.read()  # raises if SPI is not available
+        # The most recent raw bytes, shown by `slr device test-adc` and `test-controls`.
+        self.last_rx: tuple[int, int] | None = None
+        # One test read: raises if SPI is not available. A first reading at a rail usually means
+        # the divider is disconnected or VDD is wrong, so say so instead of silently using it.
+        first = self.read()
+        if first in (0, 1023):
+            log.warning(
+                "MCP3002 first reading is %d (bytes %s); check the dial divider, CH%d wiring "
+                "and that VDD is 3.3 V", first, self.rx_text(), self.channel)
+
+    def rx_text(self) -> str:
+        """Format the last SPI bytes for a log or terminal line."""
+        if self.last_rx is None:
+            return "-- --"
+        return f"{self.last_rx[0]:02x} {self.last_rx[1]:02x}"
 
     def read(self) -> int:
         """Take one measurement and return it as 0..1023.
 
-        The MCP3008 protocol: send three bytes (a start bit, then "single-ended mode + channel
-        number", then a dummy byte) and receive three bytes back; the 10-bit answer is spread
-        over the last two. ``<<`` and ``|`` are bit operations that reassemble it.
+        The MCP3002 protocol: send two bytes (start + single-ended + channel + MSB-first, then
+        a dummy byte) and receive two bytes back; the 10-bit answer is spread over the low two
+        bits of the first byte and the whole second byte. ``<<`` and ``|`` are bit operations
+        that reassemble it.
         """
-        # start bit, single-ended + channel, then clock out 10 result bits
-        r = self.spi.xfer2([1, (8 + self.channel) << 4, 0])
-        return ((r[1] & 3) << 8) | r[2]
+        # 0x68 = single-ended CH0, 0x78 = single-ended CH1; both ask for MSB-first output.
+        cmd = 0x68 | (self.channel << 4)
+        r = self.spi.xfer2([cmd, 0x00])
+        self.last_rx = (r[0], r[1])
+        return ((r[0] & 0x03) << 8) | r[1]
+
+    def close(self) -> None:
+        """Release the SPI device."""
+        self.spi.close()
 
 
 class DialThread:
@@ -279,7 +302,7 @@ class DialThread:
     settled announcements to main.py.
     """
 
-    def __init__(self, reader: Mcp3008Reader, filt: VolumeFilter, sample_hz: float,
+    def __init__(self, reader: Mcp3002Reader, filt: VolumeFilter, sample_hz: float,
                  on_level: Callable[[int], None], on_announce: Callable[[int], None]):
         """
         - reader: the ADC to read.

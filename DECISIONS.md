@@ -55,12 +55,13 @@ Choices made where the PRD (`PRD.pdf`) was ambiguous or left room (PRD rule 7). 
 - Mode switch: OFF -> TOGGLE directly sends `mode_on` then `identify`. TOGGLE -> ON sends `mode_on`, which the server ignores while active.
 - FR-43 latching TOGGLE: with `toggle_latching: true` the device ignores buttons (except shutdown) while the switch sits in TOGGLE.
 - First-run tutorial (FR-57): the device sends `help` on its first connection and stores a flag in `data/device_state/first_run_done`.
-- Default pins (BCM): shutter 17, advance 27, rewind 22, switch a 5 / b 6, fallback volume buttons 23 / 24. These avoid SPI0 (7-11, MCP3008) and I2S (18-21).
-- Default `device.yaml` volume calibration is computed from the measured resistances with a 5.6k divider read by a 10-bit MCP3008 at VREF 3.3 V: 464 / 531 / 569 counts.
+- Default pins (BCM): shutter 17, advance 27, rewind 22, switch a 5 / b 6, fallback volume buttons 23 / 24. These avoid SPI0 (7-11, MCP3002) and I2S (18-21).
+- The volume ADC is an MCP3002 (10-bit, two channels), read with its two-byte SPI command (`0x68` for CH0, `0x78` for CH1). Its VDD is also the reference, so VDD must be 3.3 V.
+- Default `device.yaml` volume calibration is computed from the measured resistances with a 5.6k divider read by a 10-bit MCP3002 at VDD 3.3 V: 464 / 531 / 569 counts. Re-run `slr device calibrate-volume` because the actual pot determines the range.
 
 ## Device
 - Camera is a USB UVC webcam read through OpenCV (the `opencv` backend is the default); the CSI `picamera2` backend remains available but is no longer installed by `install_pi.sh`.
-- Camera stays started while idle (reopening a USB camera takes about 1 s); frames are only captured and sent while streaming (FR-54, NFR-12).
+- Camera stays started while idle (reopening a USB camera takes about 1 s). The shipped `server.yaml` sets `guidance.stream_in_idle: true`, so video and detection run whenever the mode switch is ON; guidance speech/tones and search only start from Identify (burst) or Enter. With the flag off, the older on-demand stream (FR-54, NFR-12) is unchanged.
 - JPEG encoding uses simplejpeg on the Pi, then OpenCV, then Pillow.
 - The DAC is a TLV320DAC3100 configured over I2C at startup (`audio.dac: tlv320dac3100`). `dtoverlay=i2s-dac` supplies the generic I2S clocks; `audio.dac: none` is for a DAC that needs no setup.
 - Reconnect backoff is 0.5 s doubling to 4 s, well inside the 10 s recovery target (NFR-10).

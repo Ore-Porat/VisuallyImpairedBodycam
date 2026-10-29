@@ -1,5 +1,5 @@
 # Physical input -> abstract event mapping (PRD 6.4). Change this when the wiring changes.
-# BCM pin numbers. Avoid GPIO 7-11 (SPI0, MCP3008) and 18/19/20/21 (I2S DAC).
+# BCM pin numbers. Avoid GPIO 7-11 (SPI0, MCP3002) and 18/19/20/21 (I2S DAC).
 #
 # What this file is for
 #   The camera body has three buttons, a three-position mode switch and (as a fallback) two
@@ -70,7 +70,7 @@ identify_triggers:
   mode_toggle: true           # flicking the mode switch to TOGGLE
   shutter_long_press: true    # holding the shutter for long_press_s
 
-# FR-46: used only if the MCP3008 volume dial can't be read at startup
+# FR-46: used only if the MCP3002 volume dial can't be read at startup
 volume_buttons:
   up: 23
   down: 24

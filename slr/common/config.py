@@ -40,7 +40,7 @@ Words you will see
 - deep merge: combine two nested dictionaries so that inner keys are overridden one at a time
   rather than whole sections being replaced.
 - GPIO: the general-purpose input/output pins on the Raspberry Pi, numbered "BCM" style.
-- ADC: analog-to-digital converter (the MCP3008 chip) that reads the volume dial position.
+- ADC: analog-to-digital converter (the MCP3002 chip) that reads the volume dial position.
 """
 
 from __future__ import annotations
@@ -210,6 +210,10 @@ class GuidanceConfig(_Model):
 
     # Frame rate the server asks the device for while streaming.
     stream_max_fps: float = 10.0
+    # Keep the camera stream on whenever the mode switch is ON, even while waiting in IDLE.
+    # The detector still runs on every frame, but no search/guidance audio starts until the
+    # user triggers Find or Identify. Useful for a live monitor and for camera setup.
+    stream_in_idle: bool = False
 
     @model_validator(mode="after")
     def _check(self) -> GuidanceConfig:
@@ -336,11 +340,11 @@ class AudioConfig(_Model):
 
 
 class AdcConfig(_Model):
-    """``volume.adc:`` block: how the MCP3008 analog-to-digital chip is wired to the Pi's SPI bus."""
+    """``volume.adc:`` block: how the MCP3002 analog-to-digital chip is wired to the Pi's SPI bus."""
     spi_bus: int = 0
     spi_device: int = 0         # chip select: 0 = CE0 (GPIO 8), 1 = CE1 (GPIO 7)
-    # Which of the chip's 8 input channels the dial is on.
-    channel: int = 0
+    # The MCP3002 has two input channels: CH0 (0) and CH1 (1).
+    channel: int = Field(0, ge=0, le=1)
     # SPI clock speed.
     max_speed_hz: int = 1_000_000
 

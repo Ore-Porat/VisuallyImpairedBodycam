@@ -14,7 +14,7 @@ implementation choices are in [`DECISIONS.md`](DECISIONS.md).
  SLR body (worn)                                     Laptop
  USB Camera -> Pi Zero 2 W  --UDP: JPEG frames------>  YOLO detector (GrocerEye-style model)
  buttons, mode switch       <-UDP: frame acks------   guidance engine (pure logic)
- volume dial (MCP3008)      --WebSocket: controls-->  session state + shopping list
+ volume dial (MCP3002)      --WebSocket: controls-->  session state + shopping list
  headphones (I2S DAC)       <-WebSocket: cues------   Piper TTS clips, debug view, logs
 ```
 
@@ -55,6 +55,10 @@ Sim keys (in the terminal or the debug window):
 
 Options: `slr sim --camera 1`, `slr sim --file some_video.mp4`, `--no-debug`, `--no-audio`.
 
+The shipped config sets `guidance.stream_in_idle: true`: with the mode switch ON the camera
+streams continuously and the detector runs, so the debug view stays live. Find/Identify speech
+and beeps only start when you trigger them (Identify in the TOGGLE position, or `enter`).
+
 The first run renders a few hundred speech clips in the background (about a minute). After that
 they are cached in `data/clips/`.
 
@@ -75,11 +79,15 @@ Run `slr list classes` to see valid item names. Spoken names live in `config/cla
 
 ## Command reference
 
+If the package is not installed, run the same commands from the repo root with
+`python3 -m slr ...` or `python3 slr.py ...`.
+
 | Command | Purpose |
 |---|---|
 | `slr sim` | server + simulated device on this laptop (FR-70) |
 | `slr server` | laptop server for the real device |
 | `slr device` | run the device (on the Pi; `--sim` for laptop backends) |
+| `slr device test-adc` | live MCP3002 bytes/counts/voltage for the volume dial |
 | `slr device test-controls` | live readings of buttons, mode switch and volume dial (FR-76) |
 | `slr device test-camera` | open the camera and save one frame to `data/camera_test.jpg` |
 | `slr device calibrate-volume` | record dial min / middle / max (FR-44) |
@@ -98,7 +106,7 @@ Session logs (frames, detections, state changes, cues, latency, loss) go to `dat
 ## Raspberry Pi setup
 
 Hardware: Pi Zero 2 W, Raspberry Pi OS Lite 64-bit, USB UVC webcam (640x480 capable),
-TLV320DAC3100 I2S DAC with 3.5 mm jack, MCP3008 ADC (SPI).
+TLV320DAC3100 I2S DAC with 3.5 mm jack, MCP3002 ADC (SPI).
 
 ```bash
 git clone https://github.com/Ore-Porat/VisuallyImpairedBodycam.git && cd VisuallyImpairedBodycam
@@ -114,6 +122,16 @@ connected (FR-50).
 After rebooting, `i2cdetect -y 1` should show the DAC at address `18`, and
 `v4l2-ctl --list-devices` should list the USB camera. `aplay -l` should show the I2S sound card.
 
+Troubleshooting:
+
+- **`PortAudio library not found`**: `sudo apt-get install -y libportaudio2`, then check
+  `.venv/bin/python3 -c "import sounddevice as sd; print(sd.query_devices())"`. If PortAudio is
+  still unavailable, the device falls back to `aplay` for speech; guidance tones need
+  `sounddevice`.
+- **Camera not in `v4l2-ctl --list-devices`**: check `lsusb` and `dmesg | tail -30`. The camera
+  must be a UVC device; a hub or cable that does not enumerate it will not appear as
+  `/dev/video0`.
+
 No ML runtime is ever installed on the Pi: OpenCV reads the USB camera, and YOLO detection
 still runs on the laptop.
 
@@ -126,14 +144,22 @@ still runs on the laptop.
 | Rewind knob | GPIO 22 to GND | momentary |
 | Mode switch wire a / b | GPIO 5 / GPIO 6 | contact closed = 1. OFF=00, ON=11, TOGGLE=01. Flip `invert` if reversed |
 | USB camera | any USB port (OTG adapter on the Zero 2 W) | appears as `/dev/video0`; set `camera.index` if it is a different number |
-| MCP3008 | CLK GPIO 11, DOUT GPIO 9 (MISO), DIN GPIO 10 (MOSI), CS GPIO 8 (CE0); VDD + VREF 3.3 V, AGND + DGND to GND | SPI0, channel CH0 |
+| MCP3002 pin 1 (CS/SHDN) | GPIO 8 / CE0, physical pin 24 | SPI0 chip select |
+| MCP3002 pin 2 (CH0) | divider junction | volume input |
+| MCP3002 pin 3 (CH1) | unused | second channel |
+| MCP3002 pin 4 (VSS) | GND | ground |
+| MCP3002 pin 5 (DIN) | GPIO 10 / MOSI, physical pin 19 | SPI data to chip |
+| MCP3002 pin 6 (DOUT) | GPIO 9 / MISO, physical pin 21 | SPI data from chip |
+| MCP3002 pin 7 (CLK) | GPIO 11 / SCLK, physical pin 23 | SPI clock |
+| MCP3002 pin 8 (VDD) | 3.3 V, physical pin 1 or 17 | also the ADC reference; do not use 5 V |
 | Volume dial | divider: 3.3 V, 5.6k fixed, dial, GND; midpoint to CH0 | any fixed resistor works, calibration handles it |
 | I2S DAC (TLV320DAC3100) | BCK GPIO 18, WSEL GPIO 19, DIN GPIO 21, SDA GPIO 2, SCL GPIO 3, RST GPIO 4 (+ 3.3 V, GND) | `dtoverlay=i2s-dac`; no MCLK wire |
-| Fallback volume buttons | GPIO 23 / 24 | used only if the MCP3008 can't be read (FR-46) |
+| Fallback volume buttons | GPIO 23 / 24 | used only if the MCP3002 can't be read (FR-46) |
 
-Verify the hardware with `slr device test-controls` (buttons/switch/dial) and
-`slr device test-camera` (saves one camera frame to `data/camera_test.jpg`). If the USB camera is
-not `/dev/video0`, run `v4l2-ctl --list-devices` and set `camera.index` in `config/device.yaml`.
+Verify the hardware with `slr device test-adc` (dial only), `slr device test-controls`
+(buttons/switch/dial) and `slr device test-camera` (saves one camera frame to
+`data/camera_test.jpg`). If the USB camera is not `/dev/video0`, run `v4l2-ctl --list-devices`
+and set `camera.index` in `config/device.yaml`.
 
 ### Calibration
 

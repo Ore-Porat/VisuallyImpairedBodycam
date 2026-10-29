@@ -49,11 +49,11 @@ apt-get install -y python3-venv python3-pip python3-opencv python3-lgpio \
   libportaudio2 alsa-utils i2c-tools python3-smbus python3-numpy python3-simplejpeg v4l-utils
 
 # The Pi's hardware features are switched on in config.txt, read by the firmware at boot.
-#   raspi-config nonint do_spi 0  -> enable SPI (the MCP3008 volume dial chip)
+#   raspi-config nonint do_spi 0  -> enable SPI (the MCP3002 volume dial chip)
 #   raspi-config nonint do_i2c 0  -> enable I2C (the TLV320 DAC's control bus)
 #   dtoverlay=i2s-dac             -> generic I2S output; correct for the TLV320DAC3100
 #     (only appended if the line is not already there, so re-running is safe)
-echo "== enable SPI (MCP3008), I2C (TLV320), and the I2S DAC (headphone jack)"
+echo "== enable SPI (MCP3002), I2C (TLV320), and the I2S DAC (headphone jack)"
 raspi-config nonint do_spi 0 || true
 raspi-config nonint do_i2c 0 || true
 # Remove the old PCM5102A/HifiBerry overlay if a previous install added it.
