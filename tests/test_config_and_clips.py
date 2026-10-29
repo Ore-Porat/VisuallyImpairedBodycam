@@ -43,6 +43,10 @@ def test_shipped_configs_load():
     c = load_controls_config()
     assert s.network.udp_port == 8766 and s.network.ws_port == 8765
     assert s.guidance.stream_in_idle is True
+    assert s.guidance.stream_in_off is True
+    assert s.guidance.auto_find_on_mode_on is True
+    assert s.guidance.hand_guidance_always is True
+    assert s.guidance.identify_max_objects == 3
     assert d.camera.backend == "opencv"
     assert c.mode_switch.positions == {"00": "off", "11": "on", "01": "toggle"}
     # s.path() turns a repo-relative path from the config into an absolute one.
@@ -107,6 +111,8 @@ def test_phrase_rendering_uses_spoken_names(catalog):
     assert catalog.text("found", {"item": "tomato_sauce"}) == "Tomato sauce found."
     assert catalog.text("direction", {"h": "slightly_left", "v": "eye"}) == "Slightly left. Eye level."
     assert catalog.text("item_announce", {"n": 2, "total": 5, "item": "pasta"}) == "Item 2 of 5: pasta."
+    assert catalog.text("identified_many", {"items": ["pasta", "milk", "rice"]}) == \
+        "I see pasta, milk, and rice."
     assert catalog.text("wrong_item", {"other": "pasta", "item": "tomato_sauce"}) == \
         "That's pasta, not tomato sauce."
 

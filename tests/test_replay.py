@@ -36,8 +36,9 @@ def test_find_flow_replay(frames_dir, scripted_detector):
     """A full Find: switch on, press enter, walk up to pasta, press enter to check it off."""
     # Arrange: real server config, a list of two items, and three scripted button presses.
     cfg = load_server_config()
-    # This replay checks the on-demand stream. Live idle video has its own guidance tests.
+    # This replay checks the manual Enter flow and the on-demand stream.
     cfg.guidance.stream_in_idle = False
+    cfg.guidance.auto_find_on_mode_on = False
     script = {"fps": 10, "duration": 8, "list": ["pasta", "coffee"],
               "events": [{"t": 0.0, "event": "mode_on"}, {"t": 0.2, "event": "enter"},
                          {"t": 7.0, "event": "enter"}]}
@@ -63,8 +64,9 @@ def test_find_flow_replay(frames_dir, scripted_detector):
 def test_identify_replay(frames_dir):
     """Identify mode: one burst of 5 frames showing coffee ends in 'This is coffee. It's on your list.'"""
     cfg = load_server_config()
-    # Keep the burst exactly five frames; live idle video would keep the detector running.
+    # Keep the burst exactly five frames; live video would keep the detector running.
     cfg.guidance.stream_in_idle = False
+    cfg.guidance.auto_find_on_mode_on = False
     # A detector that always sees one centered coffee box.
     det = ScriptedDetector(frames=[[Detection.centered("coffee", 0.9, 0.5, 0.5, 0.3, 0.3)]])
     script = {"fps": 10, "duration": 3, "list": ["coffee"],

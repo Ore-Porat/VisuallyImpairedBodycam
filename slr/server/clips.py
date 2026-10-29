@@ -70,6 +70,17 @@ ITEM_PARAMS = ("item", "next", "other")
 DIRECTION_PARAMS = ("h", "v")
 
 
+def join_spoken(names: list[str]) -> str:
+    """Join names as a natural list: "pasta", "pasta and milk", "pasta, milk, and rice"."""
+    if not names:
+        return ""
+    if len(names) == 1:
+        return names[0]
+    if len(names) == 2:
+        return f"{names[0]} and {names[1]}"
+    return ", ".join(names[:-1]) + f", and {names[-1]}"
+
+
 # --------------------------------------------------------------------------- phrase catalog
 
 
@@ -127,7 +138,9 @@ class PhraseCatalog:
         # Convert each parameter into its spoken form before filling the template.
         values = {}
         for k, v in params.items():
-            if k in ITEM_PARAMS:
+            if k == "items" and isinstance(v, (list, tuple)):
+                values[k] = join_spoken([self.spoken(str(x)) for x in v])
+            elif k in ITEM_PARAMS:
                 values[k] = self.spoken(str(v))
             elif k in DIRECTION_PARAMS:
                 values[k] = self.directions.get(str(v), str(v))

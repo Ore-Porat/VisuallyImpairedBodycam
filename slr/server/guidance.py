@@ -26,7 +26,8 @@ some "effects" (speech, beeps, camera on/off) are produced along the way.
 
 The modes (squares):
 
-- STANDBY       The mode switch on the camera body is OFF. Nothing works except switching on.
+- STANDBY       The mode switch on the camera body is OFF. With ``stream_in_off`` the camera
+                and detector keep running as a silent monitor, but no guidance is spoken.
 - IDLE          Switched on, waiting. The shopper can browse the list, press Enter to search,
                 or press Identify.
 - SEARCHING     Camera is streaming, looking for the current list item. Nothing found yet.
@@ -280,12 +281,15 @@ class Identify:
     started_at: when the burst began (for the time-out).
     resume:     the mode to go back to afterwards (e.g. continue a search that was running).
     picks:      per frame, the best candidate (class, confidence) or None if nothing was seen.
+    seen:       per frame, every confident item candidate (class, confidence). This is used for
+                the multi-object answer; ``picks`` is kept for the single-object vote.
     """
 
     burst_id: int
     started_at: float
     resume: Mode
     picks: tuple[tuple[str, float] | None, ...] = ()
+    seen: tuple[tuple[tuple[str, float], ...], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -479,6 +483,20 @@ def is_stable(history: tuple[Detection | None, ...], cfg: GuidanceConfig) -> boo
     return sum(1 for d in history if d is not None) >= cfg.stable_k
 
 
+def identify_candidates(dets: tuple[Detection, ...], cfg: GuidanceConfig) -> tuple[tuple[str, float], ...]:
+    """Every confident non-item class visible in one frame, as (class id, confidence).
+
+    A class appears at most once per frame. The shopper's hand (and any other non-item class)
+    can never be part of an Identify answer.
+    """
+    best: dict[str, float] = {}
+    for d in dets:
+        if d.cls in cfg.non_item_classes or d.conf < cfg.conf_identify:
+            continue
+        best[d.cls] = max(best.get(d.cls, 0.0), d.conf)
+    return tuple(best.items())
+
+
 def pick_identify_candidate(dets: tuple[Detection, ...], cfg: GuidanceConfig) -> tuple[str, float] | None:
     """Most confident detection nearest the center (FR-31).
 
@@ -535,6 +553,35 @@ def vote_identify(picks: tuple[tuple[str, float] | None, ...], cfg: GuidanceConf
     return winner
 
 
+def vote_identify_many(seen: tuple[tuple[tuple[str, float], ...], ...],
+                       cfg: GuidanceConfig) -> list[str]:
+    """All classes seen in at least ``identify_min_votes`` frames, best first.
+
+    A class gets one vote per frame, not one per box, so a shelf full of the same product does
+    not outvote everything else. The result is capped at ``identify_max_objects``. With the
+    default of 1 this keeps the old tie-is-"Not sure" rule.
+    """
+    counts: Counter[str] = Counter()
+    best_conf: dict[str, float] = {}
+    for frame_objs in seen:
+        for cls, conf in frame_objs:
+            if conf < cfg.conf_identify:
+                continue
+            counts[cls] += 1
+            best_conf[cls] = max(best_conf.get(cls, 0.0), conf)
+    if not counts:
+        return []
+    ranked = sorted(counts.items(), key=lambda kv: (-kv[1], -best_conf[kv[0]], kv[0]))
+    if ranked[0][1] < cfg.identify_min_votes:
+        return []
+    if cfg.identify_max_objects == 1:
+        if len(ranked) > 1 and ranked[1][1] == ranked[0][1]:
+            return []  # tie: never guess
+        return [ranked[0][0]]
+    return [cls for cls, count in ranked
+            if count >= cfg.identify_min_votes][:cfg.identify_max_objects]
+
+
 def next_pending_index(items: tuple[ListItem, ...], start: int) -> int | None:
     """Index of the next item after ``start`` that is still pending (wrapping around), or None."""
     n = len(items)
@@ -585,24 +632,26 @@ def _streaming_now(s: State, cfg: GuidanceConfig) -> bool:
     """Whether the device has been asked to stream in this state.
 
     ``State.streaming`` covers the on-demand modes. ``stream_in_idle`` additionally keeps
-    video flowing while the switch is ON and the engine is waiting in IDLE.
+    video flowing while the switch is ON and the engine is waiting in IDLE; ``stream_in_off``
+    keeps it flowing while the switch is OFF (silent monitor mode).
     """
-    return s.streaming or (cfg.stream_in_idle and s.mode == Mode.IDLE)
+    return (s.streaming
+            or (cfg.stream_in_idle and s.mode == Mode.IDLE)
+            or (cfg.stream_in_off and s.mode == Mode.STANDBY))
 
 
 def _leave_find(s: State, cfg: GuidanceConfig, *, keep_stream: bool = False) -> tuple[State, list[Effect]]:
     """Stop any search / identify: tone off, tracking cleared, and usually stream off.
 
-    ``keep_stream`` is used when returning to IDLE. If ``stream_in_idle`` is on, the camera
-    stays live; otherwise this behaves like the original on-demand stream.
+    ``keep_stream`` says whether the caller wants the camera to stay live. The caller decides
+    using ``stream_in_idle`` (ON) or ``stream_in_off`` (OFF).
     """
     if not _streaming_now(s, cfg):
         return s, []
     s, fx = _stop_tone(s)
     s = replace(s, target=None, track=Tracking(), other_history=(), identify=None,
                 search_ref=None, not_found_said_at=None)
-    keep = keep_stream and cfg.stream_in_idle
-    return s, fx + [Stream(on=True, purpose="find") if keep else Stream(on=False)]
+    return s, fx + [Stream(on=True, purpose="find") if keep_stream else Stream(on=False)]
 
 
 def _start_search(s: State, target: str, now: float, cfg: GuidanceConfig) -> State:
@@ -630,12 +679,26 @@ def _on_control(s: State, ev: Control, now: float, cfg: GuidanceConfig) -> tuple
         s, fx = _leave_find(s, cfg)
         return replace(s, mode=Mode.STANDBY), fx
     if e == "mode_off":
-        # Mode switch flipped to OFF: stop everything and say "paused".
-        s, fx = _leave_find(s, cfg)
-        return replace(s, mode=Mode.STANDBY), fx + [say("paused", interrupt=True)]
+        # Mode switch OFF: silent monitor. Keep the camera/inference running if configured,
+        # but produce no guidance speech or tones.
+        s, fx = _leave_find(s, cfg, keep_stream=cfg.stream_in_off)
+        if cfg.stream_in_off and not any(isinstance(effect, Stream) and effect.on for effect in fx):
+            fx.append(Stream(on=True, purpose="find"))
+        return replace(s, mode=Mode.STANDBY), fx
     if e == "mode_on":
         if s.mode == Mode.STANDBY:
-            fx: list[Effect] = [say("ready", interrupt=True)]
+            if cfg.auto_find_on_mode_on:
+                # ON means "guide me now": start Find for the current list item.
+                if not s.items:
+                    fx: list[Effect] = [say("list_empty", interrupt=True)]
+                    if cfg.stream_in_idle:
+                        fx.append(Stream(on=True, purpose="find"))
+                    return replace(s, mode=Mode.IDLE), fx
+                target = s.items[s.index].name
+                s = _start_search(s, target, now, cfg)
+                return s, [say("searching", interrupt=True, item=target),
+                           Stream(on=True, purpose="find")]
+            fx = [say("ready", interrupt=True)]
             if cfg.stream_in_idle:
                 # Start the live video now; the detector runs, but no search starts until
                 # the user presses Enter or triggers Identify.
@@ -645,7 +708,7 @@ def _on_control(s: State, ev: Control, now: float, cfg: GuidanceConfig) -> tuple
 
     # --- everything below needs the device to be switched on ----------------------------
     if s.mode == Mode.STANDBY:
-        return s, [say("standby_hint")]  # only the mode switch and shutdown work in standby
+        return s, []  # silent monitor: only the mode switch, volume and shutdown work
     if s.mode == Mode.IDENTIFYING:
         return s, []  # the burst takes about a second; ignore other controls meanwhile
 
@@ -655,11 +718,18 @@ def _on_control(s: State, ev: Control, now: float, cfg: GuidanceConfig) -> tuple
         # Browse the list. Cancels any running search first.
         if not s.items:
             return s, [say("list_empty", interrupt=True)]
-        s, fx = _leave_find(s, cfg, keep_stream=True)
+        s, fx = _leave_find(s, cfg, keep_stream=cfg.stream_in_idle or cfg.auto_find_on_mode_on)
         step_by = 1 if e == "next_item" else -1
         # ``%`` wraps around: after the last item comes the first one again.
         s = replace(s, mode=Mode.IDLE, index=(s.index + step_by) % len(s.items))
-        return s, fx + [_announce_item(s)]
+        fx.append(_announce_item(s))
+        if cfg.auto_find_on_mode_on:
+            # ON keeps guiding: start searching for the newly selected item after announcing it.
+            target = s.items[s.index].name
+            s = _start_search(s, target, now, cfg)
+            if not any(isinstance(effect, Stream) and effect.on for effect in fx):
+                fx.append(Stream(on=True, purpose="find"))
+        return s, fx
     if e == "enter":
         return _on_enter(s, now, cfg)
     if e == "help":
@@ -695,29 +765,38 @@ def _on_enter(s: State, now: float, cfg: GuidanceConfig) -> tuple[State, list[Ef
         return s, [say("searching", interrupt=True, item=target),
                    Stream(on=True, purpose="find")]
     if s.mode in (Mode.SEARCHING, Mode.GUIDING):
-        s, fx = _leave_find(s, cfg, keep_stream=True)
+        s, fx = _leave_find(s, cfg, keep_stream=cfg.stream_in_idle)
         return replace(s, mode=Mode.IDLE), fx + [say("search_stopped", interrupt=True)]
     if s.mode == Mode.WITHIN_REACH:
-        return _check_off(s, cfg)
+        return _check_off(s, cfg, now)
     return s, []
 
 
-def _check_off(s: State, cfg: GuidanceConfig) -> tuple[State, list[Effect]]:
+def _check_off(s: State, cfg: GuidanceConfig, now: float) -> tuple[State, list[Effect]]:
     """Mark the current item FOUND, stop the search and move on to the next pending item.
 
-    Used by the shutter press within reach and by the hand guidance ("That's it.").
+    Used by the shutter press within reach and by the hand guidance ("That's it."). With
+    ``auto_find_on_mode_on`` the next item starts searching immediately; the "checked off"
+    cue already names it, so no extra "Searching for..." cue is needed.
     """
     target = s.target
     # Build a new items tuple with the current item marked FOUND (all others unchanged).
     # ``enumerate`` gives (position, item) pairs.
     items = tuple(replace(it, status=FOUND) if i == s.index else it for i, it in enumerate(s.items))
-    s, fx = _leave_find(s, cfg, keep_stream=True)
     nxt = next_pending_index(items, s.index)
+    keep_stream = cfg.stream_in_idle or (cfg.auto_find_on_mode_on and nxt is not None)
+    s, fx = _leave_find(s, cfg, keep_stream=keep_stream)
     if nxt is None:
         # Nothing left to find: stay on this item and celebrate.
         s = replace(s, mode=Mode.IDLE, items=items)
         return s, fx + [say("checked_off_done", interrupt=True, item=target)]
-    s = replace(s, mode=Mode.IDLE, items=items, index=nxt)
+    s = replace(s, items=items, index=nxt)
+    if cfg.auto_find_on_mode_on:
+        s = _start_search(s, items[nxt].name, now, cfg)
+        if not any(isinstance(effect, Stream) and effect.on for effect in fx):
+            fx.append(Stream(on=True, purpose="find"))
+    else:
+        s = replace(s, mode=Mode.IDLE)
     return s, fx + [say("checked_off_next", interrupt=True, item=target, next=items[nxt].name)]
 
 
@@ -741,14 +820,24 @@ def _finish_identify(s: State, now: float, cfg: GuidanceConfig) -> tuple[State, 
     if len(ident.picks) < cfg.identify_min_votes:
         cue = say("not_sure_loss", interrupt=True)  # too few frames arrived: never guess
     else:
-        winner = vote_identify(ident.picks, cfg)
-        if winner is None:
-            cue = say("not_sure", interrupt=True)
-        # ``any(...)`` is True if at least one list item matches the winner and is still pending.
-        elif any(it.name == winner and it.status == PENDING for it in s.items):
-            cue = say("identified_on_list", interrupt=True, item=winner)
+        # Keep the original single-object vote exactly when only one answer is allowed.
+        if cfg.identify_max_objects == 1:
+            winner = vote_identify(ident.picks, cfg)
+            winners = [winner] if winner is not None else []
         else:
-            cue = say("identified", interrupt=True, item=winner)
+            winners = vote_identify_many(ident.seen, cfg)
+        if not winners:
+            cue = say("not_sure", interrupt=True)
+        elif len(winners) > 1:
+            # Multi-object answer: "I see pasta, milk, and rice."
+            cue = say("identified_many", interrupt=True, items=winners)
+        else:
+            winner = winners[0]
+            # ``any(...)`` is True if at least one list item matches the winner and is still pending.
+            if any(it.name == winner and it.status == PENDING for it in s.items):
+                cue = say("identified_on_list", interrupt=True, item=winner)
+            else:
+                cue = say("identified", interrupt=True, item=winner)
     # FR-34: return to the previous state, resuming the search if one was active
     if ident.resume in FIND_MODES and s.target is not None:
         s = _start_search(s, s.target, now, cfg)
@@ -772,8 +861,12 @@ def _on_frame(s: State, f: Frame, now: float, cfg: GuidanceConfig) -> tuple[Stat
         # Ignore frames that are not part of the burst we are waiting for.
         if ident is None or f.purpose != "identify" or f.burst_id != ident.burst_id:
             return s, []
-        # Append this frame's best candidate to the picks tuple.
-        ident = replace(ident, picks=ident.picks + (pick_identify_candidate(f.detections, cfg),))
+        # Keep both the single best candidate and every confident class in this frame.
+        ident = replace(
+            ident,
+            picks=ident.picks + (pick_identify_candidate(f.detections, cfg),),
+            seen=ident.seen + (identify_candidates(f.detections, cfg),),
+        )
         s = replace(s, identify=ident)
         if len(ident.picks) >= cfg.identify_burst:
             return _finish_identify(s, now, cfg)
@@ -791,6 +884,11 @@ def _on_frame(s: State, f: Frame, now: float, cfg: GuidanceConfig) -> tuple[Stat
         track = replace(track, last_seen_at=now, last_box=det)
     s = replace(s, track=track)
 
+    # A visible hand takes priority over camera-direction speech when hand guidance is allowed
+    # early: compare the hand center with the item center and say which way to move the hand.
+    hand = pick_hand(f.detections, cfg) if cfg.hand_guidance_enabled else None
+    speak_directions = not (hand is not None and cfg.hand_guidance_always)
+
     if s.mode == Mode.SEARCHING:
         if det is not None:
             s = replace(s, search_ref=now)  # resets the "not seeing" timer (FR-12)
@@ -798,8 +896,13 @@ def _on_frame(s: State, f: Frame, now: float, cfg: GuidanceConfig) -> tuple[Stat
             # Seen often enough: announce "found" and give the first direction right away.
             s = replace(s, mode=Mode.GUIDING, other_history=())
             fx: list[Effect] = [say("found", interrupt=True, item=s.target)]
-            s, gfx = _guide(s, track.last_box, now, cfg, acquired=True)
-            return s, fx + gfx
+            s, gfx = _guide(s, track.last_box, now, cfg, acquired=True,
+                            speak_directions=speak_directions)
+            fx += gfx
+            if hand is not None and (cfg.hand_guidance_always or s.mode == Mode.WITHIN_REACH):
+                s, hfx = _guide_hand(s, f, track.last_box, now, cfg, hand=hand)
+                fx += hfx
+            return s, fx
         # Not found yet: maybe a different list item is right in front of the camera.
         return _check_wrong_item(s, f, det, now, cfg)
 
@@ -807,23 +910,23 @@ def _on_frame(s: State, f: Frame, now: float, cfg: GuidanceConfig) -> tuple[Stat
     # (the lost time-out in _timers handles a long absence).
     if det is None:
         return s, []
-    was_within_reach = s.mode == Mode.WITHIN_REACH
-    s, fx = _guide(s, det, now, cfg, acquired=False)
-    # Once the item has been within reach for a frame already, steer the hand onto it.
-    if was_within_reach and s.mode == Mode.WITHIN_REACH:
-        s, hfx = _guide_hand(s, f, det, now, cfg)
+    s, fx = _guide(s, det, now, cfg, acquired=False, speak_directions=speak_directions)
+    # Hand cues start as soon as both boxes are visible when hand_guidance_always is on.
+    if hand is not None and (cfg.hand_guidance_always or s.mode == Mode.WITHIN_REACH):
+        s, hfx = _guide_hand(s, f, det, now, cfg, hand=hand)
         fx += hfx
     return s, fx
 
 
 def _guide_hand(s: State, f: Frame, item: Detection, now: float,
-                cfg: GuidanceConfig) -> tuple[State, list[Effect]]:
-    """Hand guidance while the item is within reach: "Hand left." / "Reach forward." until the
+                cfg: GuidanceConfig, hand: Detection | None = None) -> tuple[State, list[Effect]]:
+    """Hand guidance while the target is visible: "Hand left." / "Reach forward." until the
     hand covers the item, then "That's it." (and the item is checked off if configured)."""
     if not cfg.hand_guidance_enabled:
         return s, []
     t = s.track
-    hand = pick_hand(f.detections, cfg)
+    if hand is None:
+        hand = pick_hand(f.detections, cfg)
     if hand is None:
         return replace(s, track=replace(t, hand_touch_since=None)), []
     if hand_on_item(hand, item, cfg):
@@ -836,7 +939,7 @@ def _guide_hand(s: State, f: Frame, item: Detection, now: float,
         s = replace(s, track=replace(t, hand_said="hand_on_item", hand_said_at=now))
         fx: list[Effect] = [say("hand_on_item", interrupt=True)]
         if cfg.hand_auto_check_off:
-            s, cfx = _check_off(s, cfg)
+            s, cfx = _check_off(s, cfg, now)
             fx += cfx
         return s, fx
     word = hand_direction(hand, item, cfg)
@@ -875,11 +978,12 @@ def _check_wrong_item(s: State, f: Frame, det: Detection | None, now: float,
 
 
 def _guide(s: State, box: Detection, now: float, cfg: GuidanceConfig,
-           acquired: bool) -> tuple[State, list[Effect]]:
+           acquired: bool, speak_directions: bool = True) -> tuple[State, list[Effect]]:
     """Direction, within-reach, getting-closer and tone cues for one sighting of the target.
 
-    box:      where the target is in this frame.
-    acquired: True on the very first sighting (we always speak the full direction then).
+    box:              where the target is in this frame.
+    acquired:         True on the very first sighting (we always speak the full direction then).
+    speak_directions: False while a hand is visible, so the hand cue is the only speech cue.
     """
     t = s.track
     cx, cy = adjusted_center(box, cfg)
@@ -907,7 +1011,9 @@ def _guide(s: State, box: Detection, now: float, cfg: GuidanceConfig,
         if reach_since is not None and now - reach_since >= cfg.reach_hold_s:
             s = replace(s, mode=Mode.WITHIN_REACH, track=t)
             s, tfx = _update_tone(s, box, cfg)
-            return s, [say("within_reach", interrupt=True, item=s.target)] + tfx
+            reach_cue = [] if not speak_directions else [
+                say("within_reach", interrupt=True, item=s.target)]
+            return s, reach_cue + tfx
 
     # Decide whether to speak a direction now:
     # - speak_v: the vertical zone changed (or first sighting) -> full "left, eye level" phrase
@@ -916,13 +1022,13 @@ def _guide(s: State, box: Detection, now: float, cfg: GuidanceConfig,
     speak_v = acquired or v_zone != t.said_v
     changed = h_dir != t.said_h
     due = t.said_at is None or now - t.said_at >= cfg.direction_repeat_s
-    if changed or due or speak_v:
+    if speak_directions and (changed or due or speak_v):
         if speak_v:
             fx.append(say("direction", h=h_dir, v=v_zone))
         else:
             fx.append(say("direction_h", h=h_dir))
         t = replace(t, said_h=h_dir, said_v=v_zone, said_at=now)
-    if cfg.getting_closer_enabled:
+    if cfg.getting_closer_enabled and speak_directions:
         # "Getting closer": the box has grown noticeably since the reference height.
         ref = t.closer_ref_h
         if ref is None or box.h < ref:

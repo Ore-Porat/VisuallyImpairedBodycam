@@ -27,16 +27,17 @@ Choices made where the PRD (`PRD.pdf`) was ambiguous or left room (PRD rule 7). 
 - `vertical_offset` is added to the box center y.
 - "Not seeing X" timer counts from the search start or the last raw sighting of the target.
 - Wrong-item warning (FR-20) also requires the other item to be stable (k of n frames), not just one frame: precision first. Off by default it would hide a real feature, so it's on, rate limited to every 5 s.
-- Identify: per frame the pick maximizes `conf - 0.5 * distance_from_center`. A tie in the vote is "Not sure". With fewer than 3 frames in 1.5 s it says "Not sure." (FR-32).
+- Identify: per frame the pick maximizes `conf - 0.5 * distance_from_center`. A class gets one vote per frame; classes above `identify_min_votes` are reported, up to `identify_max_objects` (shipped: 3). One object keeps the old "This is X" wording; several use "I see X, Y, and Z." A tie for the single-object answer is "Not sure". With fewer than 3 frames in 1.5 s it says "Not sure." (FR-32).
 - Controls other than the mode switch are ignored during the ~1 s identify burst.
-- next/prev during a search stops the search and announces the new item.
+- next/prev during a search stops the search and announces the new item. With `auto_find_on_mode_on`, it then starts searching for that item.
 - Enter on an already-found item still starts a search (the user chose it explicitly).
-- In standby, any non-switch control says "Paused. Turn the switch on to continue." (FR-41 needs audio confirmation).
+- OFF is a silent monitor with `stream_in_off: true`: the camera and detector keep running (so the debug view shows boxes), but the engine stays in STANDBY and emits no guidance speech or tones. Non-switch controls are ignored silently; local volume/startup/connection clips still play.
+- `mode_on` with `auto_find_on_mode_on: true` starts a Find for the current list item immediately ("Searching for X."). If the list is empty it says so and stays IDLE. Enter still stops the search; next/prev and check-off continue guiding to the next item.
 - Within-reach exits back to guiding only when the box drops below `reach_h * 0.8` or leaves the straight-ahead zone, to avoid flicker.
 - "Getting closer" (FR-22, P2) is implemented but off by default.
-- On device disconnect the server quietly goes to STANDBY; the device re-sends its switch position on reconnect, so the user hears "Connected" then "Ready". An active search is not resumed.
+- On device disconnect the server quietly goes to STANDBY; the device re-sends its switch position on reconnect. With the switch ON, the server restarts a search for the current item.
 - `non_item_classes` (default `[hand]`): detector classes that are never spoken as a found, wrong (FR-20) or identified (FR-31) item, and never offered on the shopping list.
-- Hand guidance runs only in WITHIN_REACH (item close and centered), so the shelf-level cues stay unchanged. It compares the hand box center with the item box center: a short cue names the way the HAND must move ("Hand up and left.", "Reach forward."), spoken on change or every `hand_repeat_s`. When the hand covers the item (center inside the item box, or >= `hand_touch_overlap` of the hand box overlapping) for `hand_touch_hold_s`, it says "That's it." and checks the item off (`hand_auto_check_off`), the same path as the shutter press. Only the most confident hand box counts, so a second shopper's hand in view is ignored.
+- Hand guidance compares the hand box center with the item box center: a short cue names the way the HAND must move ("Hand up and left.", "Reach forward."), spoken on change or every `hand_repeat_s`. With `hand_guidance_always: true` (shipped) it starts as soon as both boxes are visible and suppresses the camera-direction speech for that frame; the target tone keeps playing. When the hand covers the item (center inside the item box, or >= `hand_touch_overlap` of the hand box overlapping) for `hand_touch_hold_s`, it says "That's it." and checks the item off (`hand_auto_check_off`), even before the old WITHIN_REACH state. Only the most confident hand box counts, so a second shopper's hand in view is ignored.
 
 ## Audio (FR-60..66)
 - Priorities: system 3 > confirmation 2 > guidance 1 > info 0. Each phrase's priority is in `phrases.yaml`.
@@ -62,7 +63,7 @@ Choices made where the PRD (`PRD.pdf`) was ambiguous or left room (PRD rule 7). 
 
 ## Device
 - Camera is a USB UVC webcam read through OpenCV (the `opencv` backend is the default); the CSI `picamera2` backend remains available but is no longer installed by `install_pi.sh`.
-- Camera stays started while idle (reopening a USB camera takes about 1 s). The shipped `server.yaml` sets `guidance.stream_in_idle: true`, so video and detection run whenever the mode switch is ON; guidance speech/tones and search only start from Identify (burst) or Enter. With the flag off, the older on-demand stream (FR-54, NFR-12) is unchanged.
+- Camera stays started while idle (reopening a USB camera takes about 1 s). The shipped `server.yaml` sets `guidance.stream_in_idle: true` and `stream_in_off: true`, so video and detection run in both switch positions. ON auto-starts Find (`auto_find_on_mode_on`); OFF is a silent monitor. With both flags off, the older on-demand stream (FR-54, NFR-12) is unchanged.
 - JPEG encoding uses simplejpeg on the Pi, then OpenCV, then Pillow.
 - The DAC is a TLV320DAC3100 configured over I2C at startup (`audio.dac: tlv320dac3100`). `dtoverlay=i2s-dac` supplies the generic I2S clocks; `audio.dac: none` is for a DAC that needs no setup.
 - Reconnect backoff is 0.5 s doubling to 4 s, well inside the 10 s recovery target (NFR-10).

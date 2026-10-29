@@ -597,6 +597,32 @@ def test_identify_timeout_with_enough_frames_still_votes():
     assert keys(fx) == ["identified_on_list"]
 
 
+def test_identify_reports_multiple_visible_objects():
+    """Identify with identify_max_objects=3 names every class that wins the vote."""
+    cfg = GuidanceConfig(tones_enabled=False, identify_max_objects=3)
+    d = Driver(cfg=cfg)
+    d.control("identify")
+    b = d.s.identify.burst_id
+    for _ in range(5):
+        fx = d.send(frame(det("pasta", 0.9, cx=0.3), det("milk", 0.85, cx=0.7),
+                          det("hand", 0.99, cx=0.5), purpose="identify", burst_id=b), 0.1)
+    assert keys(fx) == ["identified_many"]
+    assert fx[0].params == {"items": ["pasta", "milk"]}
+
+
+def test_identify_multiple_ignores_classes_below_the_vote_floor():
+    """One lucky frame is not enough to add an object to the multi-object answer."""
+    cfg = GuidanceConfig(tones_enabled=False, identify_max_objects=3)
+    d = Driver(cfg=cfg)
+    d.control("identify")
+    b = d.s.identify.burst_id
+    for i in range(5):
+        extra = (det("tea", 0.95, cx=0.8),) if i == 0 else ()
+        fx = d.send(frame(det("pasta", 0.9), *extra, purpose="identify", burst_id=b), 0.1)
+    assert keys(fx) == ["identified_on_list"]
+    assert fx[0].params == {"item": "pasta"}
+
+
 def test_identify_picks_center_detection_per_frame():
     """Within one frame, the box nearest the center wins over a more confident one at the edge."""
     dets = (det("rice", 0.95, cx=0.05, cy=0.05), det("tea", 0.85, cx=0.5, cy=0.5))
@@ -649,12 +675,33 @@ def test_burst_ids_increment():
 
 
 def test_mode_off_from_any_state_goes_standby_and_stops_stream():
-    """Switch OFF: say "Paused", stop the stream and the beep, enter STANDBY."""
+    """Switch OFF: stop the stream and beep, enter STANDBY, and say nothing."""
     d = guiding_driver(cfg=CFG)
     fx = d.control("mode_off")
     assert d.s.mode == Mode.STANDBY
-    assert keys(fx) == ["paused"]
+    assert keys(fx) == []
     assert Stream(on=False) in fx and Tone(interval_ms=None) in fx
+
+
+def test_mode_off_keeps_stream_and_is_silent_when_configured():
+    """With stream_in_off, OFF is a silent monitor: video stays live but guidance is muted."""
+    cfg = GuidanceConfig(tones_enabled=False, stream_in_off=True)
+    d = guiding_driver(cfg=cfg)
+    fx = d.control("mode_off")
+    assert d.s.mode == Mode.STANDBY
+    assert keys(fx) == []
+    assert Stream(on=True, purpose="find") in fx
+    # Frames still reach the engine, but produce no speech or tones in STANDBY.
+    assert d.frames(3, det()) == []
+
+
+def test_mode_off_starts_stream_even_if_idle_stream_was_off():
+    """OFF must turn the monitor stream on even when no search was streaming before."""
+    cfg = GuidanceConfig(tones_enabled=False, stream_in_off=True, stream_in_idle=False)
+    d = Driver(state=replace(g.initial_state(items("pasta")), mode=Mode.IDLE), cfg=cfg)
+    fx = d.control("mode_off")
+    assert Stream(on=True, purpose="find") in fx
+    assert d.s.mode == Mode.STANDBY
 
 
 def test_mode_on_from_standby_says_ready():
@@ -683,6 +730,49 @@ def test_mode_on_can_start_idle_stream():
     assert d.s.mode == Mode.IDLE and d.s.target is None
     # The detector may still run on frames, but IDLE produces no spoken guidance.
     assert d.frames(5, det()) == []
+
+
+def test_mode_on_auto_starts_find_for_current_item():
+    """With auto_find_on_mode_on, ON means "search now", not just "ready"."""
+    cfg = GuidanceConfig(tones_enabled=False, auto_find_on_mode_on=True)
+    d = Driver(state=g.initial_state(items("pasta", "coffee")), cfg=cfg)
+    fx = d.control("mode_on")
+    assert keys(fx) == ["searching"]
+    assert Stream(on=True, purpose="find") in fx
+    assert d.s.mode == Mode.SEARCHING and d.s.target == "pasta"
+    assert d.s.index == 0
+
+
+def test_mode_on_auto_with_empty_list_stays_idle():
+    """ON with no list items explains why there is nothing to search for."""
+    cfg = GuidanceConfig(tones_enabled=False, auto_find_on_mode_on=True)
+    d = Driver(state=g.initial_state(()), cfg=cfg)
+    fx = d.control("mode_on")
+    assert keys(fx) == ["list_empty"]
+    assert d.s.mode == Mode.IDLE
+
+
+def test_browsing_with_auto_find_keeps_guiding():
+    """Next/previous item announces the new item and immediately searches for it."""
+    cfg = GuidanceConfig(tones_enabled=False, auto_find_on_mode_on=True)
+    d = Driver(state=replace(g.initial_state(items("pasta", "coffee")), mode=Mode.IDLE), cfg=cfg)
+    fx = d.control("next_item")
+    assert keys(fx) == ["item_announce"]
+    assert d.s.mode == Mode.SEARCHING and d.s.target == "coffee"
+    assert Stream(on=True, purpose="find") in fx
+
+
+def test_check_off_with_auto_find_continues_to_next_item():
+    """After checking one item off, ON keeps guiding to the next pending item."""
+    cfg = GuidanceConfig(tones_enabled=False, auto_find_on_mode_on=True)
+    state = replace(g.initial_state(items("pasta", "coffee")),
+                    mode=Mode.WITHIN_REACH, target="pasta")
+    d = Driver(state=state, cfg=cfg)
+    fx = d.control("enter")
+    assert keys(fx) == ["checked_off_next"]
+    assert d.s.items[0].status == FOUND
+    assert d.s.mode == Mode.SEARCHING and d.s.target == "coffee" and d.s.index == 1
+    assert Stream(on=True, purpose="find") in fx
 
 
 def test_stopping_search_keeps_idle_stream_when_enabled():
@@ -735,11 +825,11 @@ def test_identify_from_idle_restarts_idle_stream_when_enabled():
 
 
 def test_only_mode_switch_works_in_standby():
-    """In STANDBY every button just reminds you to turn the switch on."""
+    """In STANDBY other buttons are ignored silently; the switch is the only way out."""
     d = Driver(state=g.initial_state(items("pasta")))
     for ev in ("enter", "next_item", "identify", "help"):
         fx = d.control(ev)
-        assert keys(fx) == ["standby_hint"]
+        assert keys(fx) == []
         assert d.s.mode == Mode.STANDBY
 
 
@@ -902,6 +992,33 @@ def test_hand_covering_the_item_says_thats_it_and_checks_it_off():
     assert "checked_off_next" in keys(fx)
     assert d.s.mode == Mode.IDLE and d.s.items[0].status == FOUND and d.s.index == 1
     assert Stream(on=False) in fx
+
+
+def test_hand_guidance_starts_as_soon_as_hand_and_item_are_visible():
+    """With hand_guidance_always, GUIDING gives hand cues before the item is within reach."""
+    cfg = GuidanceConfig(tones_enabled=False, hand_guidance_always=True)
+    d = guiding_driver(cfg=cfg)
+    item = det(cx=0.5, h=0.15)
+    hand = det("hand", 0.9, cx=0.2, cy=0.8, w=0.15, h=0.15)
+    fx = d.frames(1, item, hand, dt=0.1)
+    assert d.s.mode == Mode.GUIDING
+    assert Say("hand_dir", {"hd": "hand_up_right"}) in fx
+    # Camera-direction cues are suppressed while the hand is visible.
+    assert "direction" not in keys(fx) and "direction_h" not in keys(fx)
+
+
+def test_hand_covering_the_item_checks_off_even_before_within_reach():
+    """A hand physically on the target is enough to check it off."""
+    cfg = GuidanceConfig(tones_enabled=False, hand_guidance_always=True,
+                         auto_find_on_mode_on=True)
+    d = guiding_driver(cfg=cfg)
+    item = det(cx=0.5, h=0.15)
+    hand = det("hand", 0.9, cx=0.5, cy=0.52, w=0.2, h=0.2)
+    fx = d.frames(7, item, hand, dt=0.1)
+    assert d.s.items[0].status == FOUND
+    assert "hand_on_item" in keys(fx) and "checked_off_next" in keys(fx)
+    # auto_find_on_mode_on means the next item is already being searched.
+    assert d.s.mode == Mode.SEARCHING and d.s.target == "coffee"
 
 
 def test_hand_guidance_needs_a_hand_and_can_be_disabled():

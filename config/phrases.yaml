@@ -71,6 +71,7 @@ phrases:
   identifying:         {priority: info, text: "Checking."}
   identified:          {priority: confirmation, text: "This is {item}."}
   identified_on_list:  {priority: confirmation, text: "This is {item}. It's on your list."}
+  identified_many:     {priority: confirmation, text: "I see {items}."}
   not_sure:            {priority: confirmation, text: "Not sure. Hold it closer to the camera."}
   not_sure_loss:       {priority: confirmation, text: "Not sure."}
   # Progress report (rewind knob held) and help (advance lever held)
@@ -80,13 +81,14 @@ phrases:
     priority: confirmation
     # ">-" means: the indented lines below are one long piece of text (line breaks become spaces).
     text: >-
-      Shutter: press to search for the current item, press again to stop.
+      Mode switch on starts guiding to the current item.
+      Shutter: press to stop or restart the search.
       When an item is within reach, press the shutter to check it off.
       Hold the shutter, or flip the mode switch forward, to identify what is in front of the camera.
       Film advance lever: next item. Hold it for this help.
       Rewind knob: previous item. Hold it to hear your progress.
       Turn the dial to change the volume.
-      Mode switch off pauses the device.
+      Mode switch off silences guidance but keeps the camera running.
       Hold the shutter and the advance lever together for five seconds to shut down.
 
 # Clips that ship with the device and play without the server (FR-52, FR-55, FR-56, FR-45).

@@ -183,6 +183,9 @@ class GuidanceConfig(_Model):
     identify_min_votes: int = 3
     identify_timeout_s: float = 1.5
     identify_center_weight: float = 0.5
+    # Identify reports up to this many distinct classes seen in the burst. 1 keeps the old
+    # single-object answer; 3 lets "I see pasta, milk, and rice." describe a shelf.
+    identify_max_objects: int = 1
 
     # "Wrong item" warning when a confident non-target item sits in the center of view.
     wrong_item_enabled: bool = True
@@ -193,9 +196,12 @@ class GuidanceConfig(_Model):
     # never spoken as a found, wrong or identified item; later guidance will use them to steer.
     non_item_classes: list[str] = ["hand"]
 
-    # Hand guidance: once the item is within reach, steer the shopper's hand onto it and say
-    # "That's it." when the hand covers the item (needs a model with the hand class).
+    # Hand guidance: steer the shopper's hand onto the item and say "That's it." when it covers
+    # the item (needs a model with the hand class).
     hand_guidance_enabled: bool = True
+    # Give hand cues as soon as both the hand and the target are visible. False keeps the
+    # older behavior: hand cues only after the item is close and centered (WITHIN_REACH).
+    hand_guidance_always: bool = False
     hand_class: str = "hand"
     hand_conf: float = 0.5          # hand box confidence floor
     hand_cue_tol: float = 0.08      # hand within this of the item center = aligned on that axis
@@ -225,6 +231,11 @@ class GuidanceConfig(_Model):
     # The detector still runs on every frame, but no search/guidance audio starts until the
     # user triggers Find or Identify. Useful for a live monitor and for camera setup.
     stream_in_idle: bool = False
+    # Keep the camera stream on while the mode switch is OFF. Video and inference continue,
+    # but the engine stays in STANDBY and produces no guidance speech or tones.
+    stream_in_off: bool = False
+    # Start a Find for the current shopping-list item as soon as the switch goes ON.
+    auto_find_on_mode_on: bool = False
 
     @model_validator(mode="after")
     def _check(self) -> GuidanceConfig:
@@ -237,6 +248,8 @@ class GuidanceConfig(_Model):
             raise ValueError("need 0 < high_shelf_max < low_shelf_min < 1")
         if self.identify_min_votes > self.identify_burst:
             raise ValueError("identify_min_votes cannot exceed identify_burst")
+        if not 1 <= self.identify_max_objects <= 10:
+            raise ValueError("identify_max_objects must be in 1..10")
         if self.tone_interval_min_ms > self.tone_interval_max_ms:
             raise ValueError("tone_interval_min_ms must be <= tone_interval_max_ms")
         # getattr(self, name) reads a field by its name as a string, so one loop can check all

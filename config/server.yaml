@@ -80,6 +80,7 @@ guidance:
   identify_min_votes: 3      # the same class must win in at least this many of them
   identify_timeout_s: 1.5    # give an answer (or "Not sure") after this long regardless
   identify_center_weight: 0.5   # how much being near the frame center counts vs confidence
+  identify_max_objects: 3    # report up to this many distinct visible objects
 
   # Wrong item nearby (FR-20)
   wrong_item_enabled: true
@@ -87,10 +88,11 @@ guidance:
   wrong_item_repeat_s: 5.0      # repeat the warning no more often than this
   non_item_classes: [hand]      # detector classes that are never spoken as an item (FR-20, FR-31)
 
-  # Hand guidance (needs a model with the hand class, e.g. models/grocereye_hand). Once the
-  # item is within reach, the visible hand is steered onto it ("Hand left.", "Reach forward.")
-  # and "That's it." checks the item off when the hand covers it.
+  # Hand guidance (needs a model with the hand class, e.g. models/grocereye_hand). The visible
+  # hand is steered onto the item ("Hand left.", "Reach forward.") and "That's it." checks the
+  # item off when the hand covers it.
   hand_guidance_enabled: true
+  hand_guidance_always: true # start hand cues as soon as a hand and the target are visible
   hand_conf: 0.5             # hand box confidence floor
   hand_cue_tol: 0.08         # hand within this of the item center (frame fraction) = aligned
   hand_touch_overlap: 0.3    # share of the hand box that must overlap the item to count as touching
@@ -116,10 +118,12 @@ guidance:
   # Maximum frames per second the device is asked to stream.
   # 20 fps is a sustainable target for the Pi Zero 2 W at 640x480.
   stream_max_fps: 20
-  # Keep the camera live while the mode switch is ON, even before a search starts.
-  # The model still runs on these frames, so the debug view shows boxes, but no search,
-  # guidance speech or tones start until Identify (burst) or Enter is used.
+  # Keep the camera live while the mode switch is ON, even if a search is stopped.
   stream_in_idle: true
+  # Keep the camera and detector running while the switch is OFF, but stay silent.
+  stream_in_off: true
+  # ON means "guide me now": start Find for the current list item automatically.
+  auto_find_on_mode_on: true
 
 # Text-to-speech: how sentences from config/phrases.yaml become audio clips.
 tts:

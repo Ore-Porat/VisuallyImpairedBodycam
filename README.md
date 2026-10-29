@@ -4,8 +4,8 @@ A vintage SLR film camera, worn on a neck strap, retrofitted with a Raspberry Pi
 USB camera. It helps blind and low-vision shoppers find the right item on a shelf, hands free,
 using only audio:
 
-- **Find mode** guides you to an item on your shopping list: *"Pasta found. Slightly left. Eye level."* ... *"Within reach. Pasta straight ahead."* ... *"Hand up and left."* ... *"Reach forward."* ... *"That's it. Pasta checked off."* (the hand cues need a model with the `hand` class, see `guidance.hand_guidance_enabled`)
-- **Identify mode** tells you what you're holding: *"This is coffee. It's on your list."*
+- **Find mode** guides you to an item on your shopping list: *"Pasta found. Slightly left. Eye level."* ... *"Hand up and left."* ... *"Reach forward."* ... *"That's it. Pasta checked off."* Hand cues start as soon as both your hand and the item are visible (the model must have the `hand` class; see `guidance.hand_guidance_enabled` and `hand_guidance_always`).
+- **Identify mode** tells you what is in front of the camera: *"This is coffee. It's on your list."* or *"I see pasta, milk, and rice."* (up to `guidance.identify_max_objects`).
 
 Team #4 Colorado Dreaming, GEEN 1400 Fall 2026. The product spec is [`PRD.pdf`](PRD.pdf);
 implementation choices are in [`DECISIONS.md`](DECISIONS.md).
@@ -45,9 +45,9 @@ Sim keys (in the terminal or the debug window):
 |---|---|---|
 | `â†’` / `n` | next_item | next item on the list |
 | `â†` / `p` | prev_item | previous item |
-| `Space` | enter | start search / check off when within reach / cancel |
+| `Space` | enter | stop/restart search / check off when within reach |
 | `i` | identify | what is in front of the camera? |
-| `o` / `x` | mode_on / mode_off | ready / paused (the mode switch) |
+| `o` / `x` | mode_on / mode_off | start guidance / silent monitor (the mode switch) |
 | `+` / `-` | volume | volume 0 to 10 |
 | `h` / `s` | help / status | spoken help, progress |
 | `q` | shutdown | quit |
@@ -55,9 +55,10 @@ Sim keys (in the terminal or the debug window):
 
 Options: `slr sim --camera 1`, `slr sim --file some_video.mp4`, `--no-debug`, `--no-audio`.
 
-The shipped config sets `guidance.stream_in_idle: true`: with the mode switch ON the camera
-streams continuously and the detector runs, so the debug view stays live. Find/Identify speech
-and beeps only start when you trigger them (Identify in the TOGGLE position, or `enter`).
+The shipped config sets `guidance.stream_in_idle: true` and `stream_in_off: true`: the camera
+and detector run in both switch positions, so the debug view stays live. OFF is a silent
+monitor. ON automatically searches for the current list item, gives shelf and hand cues, and
+plays the guidance beeps. Identify is the TOGGLE position (or a long shutter press).
 
 The first run renders a few hundred speech clips in the background (about a minute). After that
 they are cached in `data/clips/`.
@@ -197,10 +198,10 @@ client), `training/` (dataset, train, evaluate, thresholds, capture), `deploy/` 
 1. Charge the device battery pack.
 2. Start the laptop hotspot; confirm the Pi joins (`ping` it) and UDP isn't blocked between clients.
 3. `slr server` on the laptop (debug view opens). Check the model line in the log.
-4. Power on the device: it says "Starting up", then "Ready".
-5. Mode switch to ON. Turn the volume dial and check "Volume N" in the headphones.
+4. Power on the device: it says "Starting up". With the switch OFF, video keeps running silently.
+5. Mode switch to ON. It says "Searching for ..." and starts giving direction/hand cues. Turn the volume dial and check "Volume N" in the headphones.
 6. `slr list reset` (or the web editor) and confirm the list with `slr list show`.
-7. Quick check: Identify a known item, then a Find of one item.
+7. Quick check: Identify a known item, then switch ON for a Find of one item.
 8. After the demo: hold shutter + advance for 5 s to shut down safely.
 
 ## Acceptance test
