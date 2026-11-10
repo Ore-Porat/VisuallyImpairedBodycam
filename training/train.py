@@ -459,11 +459,10 @@ def main(argv: list[str] | None = None) -> int:
     save_dir = Path(model.trainer.save_dir)
     best = publish_weights(save_dir, args.name, repo_path(args.models_dir))
     print(f"\nRun dir: {save_dir}\nPublished: {best}\n")
-    # Tell the user exactly what to put in the server's config to use the new model.
-    print("Use it in config/server.yaml:")
-    print(f"  model.weights: {_rel(best)}")
-    print("  model.classes_file: config/classes.yaml")
-    print(f"  model.imgsz: {args.imgsz}   # match the training size")
+    # The shipped server uses the fast zero-shot pipeline. Keep trained weights for
+    # experiments/evaluation; config/server.yaml no longer loads them.
+    print("The shipped server uses backend: fast_grocery (see README 'The model').")
+    print(f"Trained weights for experiments: {_rel(best)}")
     print(f"\nNext: python training/evaluate.py --weights {_rel(best)}"
           + ("" if len(data_files) == 1 else f" --data {_rel(Path(data))}"))
     return 0

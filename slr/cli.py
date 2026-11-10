@@ -224,7 +224,8 @@ def cmd_bench(args) -> None:
         # Create the folder if needed, then write a small Markdown report with a header line.
         Path(args.out).parent.mkdir(parents=True, exist_ok=True)
         Path(args.out).write_text(f"# slr bench {time.strftime('%Y-%m-%d %H:%M')}\n\n"
-                                  f"source: {source}, target: {args.target}, model: {scfg.model.weights}\n\n"
+                                  f"source: {source}, target: {args.target}, "
+                                  f"model: {scfg.model.active_model}\n\n"
                                   + report + "\n")
         print(f"report written to {args.out}")
 

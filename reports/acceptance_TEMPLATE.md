@@ -2,7 +2,7 @@
 
 Protocol: PRD section 13. Pass = NFR-1, NFR-4 and NFR-7 met.
 
-- Model: `<model.weights>`  conf_find: `<value>`
+- Model: `<model.fast_detector_engine>`  conf_find: `<value>`
 - Laptop / hotspot:
 - Tester(s):
 - Session log(s): `data/logs/...`

@@ -162,14 +162,9 @@ model never trained on. A split you also used for early stopping is optimistic.
 
 ## Using the weights (TR-15)
 
-`train.py` copies `best.pt` to `models/<name>/` and prints the lines to put in `config/server.yaml`:
-
-```yaml
-model:
-  weights: models/grocereye_a/best.pt
-  classes_file: config/classes.yaml
-  imgsz: 320
-```
+`train.py` copies `best.pt` to `models/<name>/` for evaluation and experiments. The shipped
+server now uses the fast zero-shot pipeline (`backend: fast_grocery`; see the README section
+"The model"), so trained YOLO weights are no longer loaded by `config/server.yaml`.
 
 Commit `models/<name>/eval_report.md`. Weights are gitignored, so share them through the team
 drive or download them from Colab.

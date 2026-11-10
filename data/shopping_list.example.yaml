@@ -11,12 +11,12 @@
 #   current: which item (counting from 0) the device is pointing at right now.
 #   items:   one entry per item. `name` must be an id from config/classes.yaml;
 #            `status` is "pending" (still to find) or "found" (already checked off).
-#   A plain list of names (items: [pasta, coffee]) is also accepted and means all pending.
+#   A plain list of names (items: [chips, soda]) is also accepted and means all pending.
 current: 0
 items:
-  - name: pasta
+  - name: chips
     status: pending
-  - name: coffee
+  - name: soda
     status: pending
-  - name: rice
+  - name: cookies
     status: pending

@@ -11,6 +11,7 @@ venv/
 .pytest_cache/
 build/
 dist/
+.direnv
 
 # Runtime data: ignored except the example shopping list
 data/*
@@ -22,6 +23,7 @@ data/replay/*
 # Model weights are large: ignore them, keep eval reports
 models/**/*.pt
 models/**/*.onnx
+models/**/*.engine
 models/**/*.weights
 models/**/*.json
 !models/**/eval_report*.md
@@ -43,3 +45,6 @@ Thumbs.db
 !models/grocereye_p6k2/results.csv
 !models/grocereye_hand/best.pt
 !models/snacks_yolo11n.pt
+
+!models/hand_best.pt
+!models/yolov8s-worldv2.pt

@@ -34,14 +34,18 @@ dependencies = [
 # Optional groups of packages. Install with pip install -e ".[name]".
 [project.optional-dependencies]
 # Laptop: detector, TTS, debug view, mDNS
-#   opencv-python  camera / image handling and the debug window
-#   ultralytics    the YOLO object detector
+#   opencv-python  camera / image handling and the debug view
+#   ultralytics    YOLO-World and EgoHands inference
+#   transformers   CLIP text/image embeddings for the grocery labels
+#   tensorrt-cu13  TensorRT runtime for the exported .engine files (Linux x86_64)
 #   piper-tts      text-to-speech that renders the spoken phrases
 #   zeroconf       mDNS, so the device can find the laptop by name
 #   sounddevice    audio playback (used by the simulated device)
 server = [
     "opencv-python>=4.8",
     "ultralytics>=8.3",
+    "transformers>=4.40",
+    "tensorrt-cu13>=11.4; platform_system=='Linux' and platform_machine=='x86_64'",
     "piper-tts>=1.2",
     "zeroconf>=0.130",
     "sounddevice>=0.4.6",   # sim device plays through laptop speakers

@@ -126,7 +126,7 @@ class ServerApp:
             log.warning("shopping list item %r is not a class of the loaded model", name)
         self.session_log = SessionLog(cfg.path(cfg.paths.logs_dir))
         self.core = ServerCore(cfg.guidance, self.catalog, self.shopping, self.session_log)
-        self.session_log.write("server_start", version=__version__, model=cfg.model.weights,
+        self.session_log.write("server_start", version=__version__, model=cfg.model.active_model,
                                backend=cfg.model.backend)
 
         # One dedicated worker thread for the detector (loading and running a model is slow

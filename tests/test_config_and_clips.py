@@ -47,6 +47,9 @@ def test_shipped_configs_load():
     assert s.guidance.auto_find_on_mode_on is True
     assert s.guidance.hand_guidance_always is True
     assert s.guidance.identify_max_objects == 3
+    assert s.model.backend == "fast_grocery"
+    assert s.model.fast_detector_engine.endswith("shelf_world_s.engine")
+    assert s.model.fast_hand_engine.endswith("hand_egohands_960.engine")
     assert d.camera.backend == "opencv"
     assert c.mode_switch.positions == {"00": "off", "11": "on", "01": "toggle"}
     assert c.mode_switch.toggle_hold_s == 0.8

@@ -12,7 +12,7 @@ implementation choices are in [`DECISIONS.md`](DECISIONS.md).
 
 ```
  SLR body (worn)                                     Laptop
- USB Camera -> Pi Zero 2 W  --UDP: JPEG frames------>  YOLO detector (GrocerEye-style model)
+ USB Camera -> Pi Zero 2 W  --UDP: JPEG frames------>  YOLO-World + CLIP (fast zero-shot)
  buttons, mode switch       <-UDP: frame acks------   guidance engine (pure logic)
  volume dial (MCP3002)      --WebSocket: controls-->  session state + shopping list
  headphones (I2S DAC)       <-WebSocket: cues------   Piper TTS clips, debug view, logs
@@ -32,6 +32,7 @@ python -m venv .venv
 pip install -e ".[server,dev]"
 # NVIDIA GPU (recommended): install the CUDA build of PyTorch first, e.g.
 #   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+# The fast detector also needs the TensorRT runtime (installed by the server extra on Linux).
 
 slr clips download-voice        # one-time Piper voice download (needs internet once)
 slr clips build-system          # render the device's local clips (already committed)
@@ -70,18 +71,32 @@ they are cached in `data/clips/`.
 
 ## The model
 
-The server ships with the Stage A GrocerEye model (`models/grocereye_a/best.pt`, YOLO11n trained on
-the Freiburg "5K Groceries" data: **test mAP50 0.930** vs GrocerEye's 0.846, see
-[`models/grocereye_a/eval_report.md`](models/grocereye_a/eval_report.md)). It knows 25 categories
-(pasta, rice, coffee, tea, ...), not brands. It was trained on close-up photos of German packaging, so
-Identify mode (item held near the camera) works best; Stage B (our own photos) is needed for shelf
-distance and US packaging. See [`training/README.md`](training/README.md).
+The server ships with the fast zero-shot grocery pipeline. It does not need training on the
+production camera or room:
 
-To debug the pipeline with everyday objects instead, switch `config/server.yaml` to the stock COCO
-model: `weights: yolo11n.pt`, `classes_file: config/classes_coco.yaml`, `imgsz: 640`.
+- **YOLO-World** (TensorRT) proposes generic product boxes.
+- **CLIP ViT-B/16** names each crop with one of the 26 grocery classes in
+  `config/classes.yaml` (`pasta`, `soda`, `cookies`, ...).
+- **EgoHands YOLO** supplies the shopper's hand boxes, which drive hand guidance.
+
+The two engines live in [`models/tensorrt/`](models/tensorrt/README.md). They are not committed
+because TensorRT engines are specific to the GPU, TensorRT version and export flags that built
+them. Copy or rebuild them as described in
+[`models/tensorrt/README.md`](models/tensorrt/README.md). CLIP is downloaded once from Hugging
+Face and cached.
+
+On the RTX 4070 laptop the S detector + EgoHands + FP16 CLIP runs around 30 FPS. Use
+`shelf_world.engine` (L) if product recall matters more than the last few FPS.
+
+`fast_clip_conf: 0.80` is conservative. Lower it (for example 0.5) if live recall is low; the
+guidance engine's `stable_k` / `stable_n` filter handles flicker. For dense shelves, raise
+`fast_detector_conf` from 0.01 to 0.1–0.25.
 
 Run `slr list classes` to see valid item names. Spoken names live in `config/classes.yaml`
 (`tomato_sauce: tomato sauce`).
+
+The old trained YOLO weights and reports remain in `models/` as historical artifacts, but the
+server no longer loads them.
 
 ## Command reference
 

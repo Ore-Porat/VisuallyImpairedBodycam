@@ -105,35 +105,74 @@ class NetworkConfig(_Model):
 
 
 class ModelConfig(_Model):
-    """``model:`` block of server.yaml: which object detector to run and how."""
-    # Which detection library: ultralytics (YOLO), OpenCV's darknet loader, or a scripted fake
-    # detector used by tests and replays.
-    backend: Literal["ultralytics", "darknet_opencv", "scripted"] = "ultralytics"
-    # Model weights file. The trained grocery model lives in models/grocereye_a/best.pt.
-    weights: str = "yolo11n.pt"
-    # YAML file mapping class ids to spoken names.
-    classes_file: str = "config/classes_coco.yaml"
-    # "auto" picks the GPU if one is available, else the CPU.
+    """``model:`` block of server.yaml: the fast zero-shot grocery detector.
+
+    The shipped model has no trained grocery classifier. YOLO-World proposes
+    generic product boxes, CLIP names each crop with one of the 26 grocery
+    classes, and EgoHands supplies the shopper's hand. The engines are TensorRT
+    files built for the target GPU (see ``models/tensorrt/README.md``).
+    """
+    # fast_grocery is the real detector; scripted replays a JSON file for tests/replay.
+    backend: Literal["fast_grocery", "scripted"] = "fast_grocery"
+    # YAML file mapping class ids to spoken names. Must match the CLIP prompts.
+    classes_file: str = "config/classes.yaml"
+    # "auto" picks the GPU if one is available, else the CPU. TensorRT needs CUDA.
     device: str = "auto"
-    # Image size (pixels) the model is run at. Smaller = faster, less accurate.
-    imgsz: int = 640
-    # Detections below this confidence are dropped before guidance sees them.
-    min_conf: float = 0.25
-    # Use 16-bit floats on the GPU (faster) instead of 32-bit.
-    half: bool = False
-    # Only used by the darknet_opencv backend.
-    darknet_cfg: str | None = None
-    darknet_weights: str | None = None
+
+    # YOLO-World product detector (TensorRT engine or a YOLO-World .pt).
+    fast_detector_engine: str = "models/tensorrt/shelf_world_s.engine"
+    fast_detector_imgsz: int = 640
+    fast_detector_conf: float = 0.01
+    fast_detector_iou: float = 0.5
+    fast_max_det: int = 100
+
+    # CLIP classifier for the crop labels.
+    fast_clip_model: str = "openai/clip-vit-base-patch16"
+    fast_clip_conf: float = 0.80
+    fast_clip_half: bool = True
+    fast_clip_batch: int = 16
+
+    # EgoHands hand detector. None disables hand boxes and hand guidance cues.
+    fast_hand_engine: str | None = "models/tensorrt/hand_egohands_960.engine"
+    fast_hand_imgsz: int = 960
+    fast_hand_conf: float = 0.30
+    fast_max_hands: int = 2
+
+    # Boxes smaller than this many pixels are skipped; class-aware NMS removes duplicates.
+    fast_min_box: int = 24
+    fast_nms_iou: float = 0.30
+
     # Only used by the scripted backend: a JSON file of pre-recorded detections.
     scripted_file: str | None = None
-    # Optional second YOLO model whose ONLY job is to find the shopper's hand (its ``hand``
-    # class is merged into the main model's detections, everything else it sees is dropped).
-    # Lets a product model without a hand class still drive hand guidance. None = off.
-    hand_weights: str | None = None
-    hand_imgsz: int = 320
-    # Classes the model knows but the server should act as if it never saw (not drawn, not
-    # spoken, not on the list). Handy to mute one class for a demo without retraining.
-    ignore_classes: list[str] = []
+
+    @model_validator(mode="after")
+    def _check_fast(self) -> ModelConfig:
+        """Reject impossible fast-model settings with a clear startup error."""
+        if not self.fast_detector_engine:
+            raise ValueError("fast_detector_engine cannot be empty")
+        if not self.classes_file:
+            raise ValueError("classes_file cannot be empty")
+        if not self.fast_clip_model:
+            raise ValueError("fast_clip_model cannot be empty")
+        if self.fast_hand_engine is not None and not self.fast_hand_engine:
+            raise ValueError("fast_hand_engine must be a path or null")
+        if not 0 <= self.fast_detector_conf <= 1:
+            raise ValueError("fast_detector_conf must be in [0, 1]")
+        for name in ("fast_clip_conf", "fast_hand_conf", "fast_detector_iou", "fast_nms_iou"):
+            if not 0 < getattr(self, name) <= 1:
+                raise ValueError(f"{name} must be in (0, 1]")
+        for name in ("fast_detector_imgsz", "fast_hand_imgsz", "fast_max_det",
+                     "fast_max_hands", "fast_clip_batch", "fast_min_box"):
+            if getattr(self, name) < 1:
+                raise ValueError(f"{name} must be at least 1")
+        return self
+
+    @property
+    def active_model(self) -> str:
+        """The model path shown in logs and benchmark reports."""
+        if self.backend == "fast_grocery":
+            return self.fast_detector_engine
+        return self.scripted_file or "scripted"
 
 
 class GuidanceConfig(_Model):

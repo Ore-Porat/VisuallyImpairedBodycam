@@ -30,6 +30,10 @@ pkgs.mkShell {
   ];
 
   shellHook = ''
+    # TensorRT engines need the host NVIDIA driver libraries. Without this,
+    # torch.cuda.is_available() is false inside the nix shell.
+    export LD_LIBRARY_PATH=/run/opengl-driver/lib:$LD_LIBRARY_PATH
+
     export LD_LIBRARY_PATH=${pkgs.lib.makeLibraryPath [
           pkgs.stdenv.cc.cc.lib
           pkgs.xorg.libxcb

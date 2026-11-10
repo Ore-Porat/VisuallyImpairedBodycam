@@ -3,9 +3,10 @@
 # spoken names freely (the script keeps existing spoken names when it regenerates).
 #
 # What this file is for
-#   The object-detection model can only recognize the categories it was trained on. This
-#   file lists those categories. Each line is:   internal_id: what the voice should say
-#   The left side (the id) must match the model and is used in commands such as
+#   The fast zero-shot detector has one CLIP prompt per grocery class in
+#   slr/server/grocery_taxonomy.py. This file lists the same ids and is the authoritative
+#   list of item names for the shopping list. Each line is:   internal_id: what the voice says
+#   The left side (the id) must match the CLIP label and is used in commands such as
 #   `slr list add tomato_sauce`. The right side is only for speech, so you can change it to
 #   anything that sounds natural ("tomato sauce", "pasta sauce", ...).
 #
