@@ -45,6 +45,7 @@ from slr.common.config import ServerConfig, load_classes, read_yaml
 from slr.server import guidance as g
 from slr.server.clips import PhraseCatalog
 from slr.server.core import ServerCore
+from slr.server.motion import MotionEstimator
 from slr.server.session import ShoppingList
 
 
@@ -82,6 +83,9 @@ def run_replay(cfg: ServerConfig, source: str | Path, script: dict, detector, ca
         streaming = False
         purpose, burst_left, burst_id = "find", None, 0
         frame_no = 0
+        # The live server estimates camera motion from the decoded picture; replay does the
+        # same so a recorded walking session produces the same (non-)lost behaviour.
+        motion = MotionEstimator()
         dt = 1.0 / fps
         steps = int(round(duration * fps))
         # ei = index of the next scripted event still to apply.
@@ -121,9 +125,13 @@ def run_replay(cfg: ServerConfig, source: str | Path, script: dict, detector, ca
             if streaming:
                 img = camera.capture()
                 frame_no += 1
+                # Same camera-motion gate as the live server (see slr/server/motion.py).
+                cam_motion = motion.update(img)
                 dets = tuple(detector.detect(img))
                 prev = core.state.mode
-                apply(core.handle(g.Frame(dets, purpose, burst_id if purpose == "identify" else 0), t), t, prev)
+                apply(core.handle(g.Frame(dets, purpose,
+                                          burst_id if purpose == "identify" else 0,
+                                          cam_motion), t), t, prev)
                 # An identify burst stops by itself after the requested number of frames.
                 if burst_left is not None:
                     burst_left -= 1

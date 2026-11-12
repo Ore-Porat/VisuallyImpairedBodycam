@@ -139,6 +139,8 @@ class DeviceApp:
         self._apply_volume(self.volume_level)
         self.play_local("starting_up")
 
+        log.info("mac");
+
         # Server address "auto": look for the laptop on the network by its mDNS name.
         if self.cfg.server.host == "auto":
             from slr.common.discovery import discover

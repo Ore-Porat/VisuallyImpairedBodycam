@@ -66,9 +66,9 @@ def det(cls="pasta", conf=0.9, cx=0.5, cy=0.5, w=0.1, h=0.2):
     return Detection.centered(cls, conf, cx, cy, w, h)
 
 
-def frame(*dets, purpose="find", burst_id=0):
-    """A camera-frame event carrying the given detections."""
-    return Frame(tuple(dets), purpose, burst_id)
+def frame(*dets, purpose="find", burst_id=0, motion=0.0):
+    """A camera-frame event carrying the given detections and camera motion."""
+    return Frame(tuple(dets), purpose, burst_id, motion)
 
 
 def says(fx):
@@ -1145,3 +1145,160 @@ def test_hand_direction_words():
     assert g.hand_direction(det("hand", cx=0.2, cy=0.9), item, cfg) == "hand_up_right"
     assert g.hand_direction(det("hand", cx=0.8, cy=0.5), item,
                             GuidanceConfig(flip_horizontal=True)) == "hand_right"
+
+
+# --------------------------------------------------------------------------- object permanence
+# The detector cannot see an item through the shopper's hand, so the item box disappears
+# exactly when a grab succeeds. A wearable camera also moves with the head. These tests pin
+# the two mechanisms that stop those normal events from sounding like "Lost it.".
+
+
+def occluded_driver(**kw):
+    """Guiding pasta, with the hand resting on the item (anchor recorded, item still visible)."""
+    cfg = kw.pop("cfg", GuidanceConfig(tones_enabled=False, hand_guidance_always=True))
+    d = guiding_driver(cfg=cfg, **kw)
+    d.frames(1, det(cx=0.5, h=0.4),
+             det("hand", 0.9, cx=0.5, cy=0.55, w=0.2, h=0.2), dt=0.1)
+    assert d.s.track.hand_offset is not None
+    return d
+
+
+def test_hand_over_item_is_not_lost_while_the_hand_covers_it():
+    """The grab itself must check the item off, not produce "Lost it."."""
+    d = occluded_driver()
+    hand = det("hand", 0.9, cx=0.5, cy=0.55, w=0.2, h=0.2)
+    fx = d.frames(8, hand, dt=0.1)          # the item box is gone for 0.8 s
+    assert "lost" not in keys(fx)
+    assert "hand_on_item" in keys(fx)
+    assert d.s.items[0].status == FOUND
+
+
+def test_a_covered_item_never_says_lost_within_the_ghost_window():
+    """With check-off disabled the grab cue still suppresses "Lost it." while covered."""
+    d = occluded_driver(cfg=GuidanceConfig(tones_enabled=False, hand_guidance_always=True,
+                                           hand_auto_check_off=False, hand_ghost_max_s=3.0))
+    hand = det("hand", 0.9, cx=0.5, cy=0.55, w=0.2, h=0.2)
+    fx = d.frames(18, hand, dt=0.1)          # 1.8 s, past lost_timeout_s
+    assert "hand_on_item" in keys(fx)
+    assert "lost" not in keys(fx)
+
+
+def test_a_big_hand_covering_a_small_item_counts_as_a_grab():
+    """A small product sits entirely inside the hand box; that is still a grab."""
+    cfg = GuidanceConfig()
+    assert g.hand_on_item(det("hand", 0.9, cx=0.52, cy=0.5, w=0.25, h=0.25),
+                          det(cx=0.5, cy=0.5, w=0.05, h=0.05), cfg)
+    assert not g.hand_on_item(det("hand", 0.9, cx=0.8, cy=0.8, w=0.1, h=0.1),
+                              det(cx=0.5, cy=0.5, w=0.05, h=0.05), cfg)
+
+
+def test_a_hand_that_leaves_the_item_clears_the_anchor():
+    """The stored hand/item geometry is only valid while the hand is actually on the item."""
+    d = occluded_driver()
+    assert d.s.track.hand_offset is not None
+    d.frames(1, det(cx=0.5, h=0.4), det("hand", 0.9, cx=0.1, cy=0.1, w=0.15, h=0.15), dt=0.1)
+    assert d.s.track.hand_offset is None
+
+
+def test_ghost_follows_the_hand_when_the_wearer_moves():
+    """The predicted box is anchored to the hand, so a head turn moves it too."""
+    d = occluded_driver()
+    hand = det("hand", 0.9, cx=0.65, cy=0.55, w=0.2, h=0.2)   # same hand, 15% further right
+    d.frames(1, hand, dt=0.1)
+    ghost = d.s.track.ghost_box
+    assert ghost is not None
+    assert ghost.cx == pytest.approx(0.65)
+    assert ghost.cy == pytest.approx(0.5)
+    assert ghost.h == pytest.approx(0.4)
+    # ...and the grab still completes at the new place.
+    fx = d.frames(5, hand, dt=0.1)
+    assert "lost" not in keys(fx)
+    assert d.s.items[0].status == FOUND
+
+
+def test_a_real_sighting_replaces_the_ghost():
+    """Reacquisition always wins: the detector's box is the truth again."""
+    d = occluded_driver()
+    d.frames(1, det("hand", 0.9, cx=0.5, cy=0.55, w=0.2, h=0.2), dt=0.1)
+    assert d.s.track.ghost_box is not None
+    fx = d.frames(1, det(cx=0.8, h=0.2), dt=0.1)               # item visible again, elsewhere
+    assert d.s.track.ghost_box is None
+    assert d.s.track.last_box.cx == pytest.approx(0.8)
+    assert "lost" not in keys(fx)
+
+
+def test_the_ghost_expires_when_the_hand_never_grabs():
+    """A hand that just hovers must not hide a missing item forever."""
+    d = occluded_driver(cfg=GuidanceConfig(tones_enabled=False, hand_guidance_always=True,
+                                           hand_auto_check_off=False))
+    hand = det("hand", 0.9, cx=0.5, cy=0.55, w=0.2, h=0.2)
+    fx = d.frames(30, hand, dt=0.1)          # 3 s: the ghost is gone after 1.2 s
+    assert "hand_on_item" in keys(fx)        # the grab cue still fires...
+    assert "lost" in keys(fx)                # ...but the item is reported lost afterwards
+
+
+def test_a_flickering_hand_cannot_hide_a_missing_item_forever():
+    """Even if the hand detector drops frames, the ghost cannot be recreated indefinitely."""
+    d = occluded_driver(cfg=GuidanceConfig(tones_enabled=False, hand_guidance_always=True,
+                                           hand_auto_check_off=False, hand_ghost_max_s=3.0))
+    hand = det("hand", 0.9, cx=0.5, cy=0.55, w=0.2, h=0.2)
+    fx = []
+    for i in range(60):                      # 6 s, hand seen on every other frame
+        dets = (hand,) if i % 2 == 0 else ()
+        fx += d.send(frame(*dets), dt=0.1)
+    assert "lost" in keys(fx)
+
+
+def test_a_hand_far_from_the_item_does_not_create_a_ghost():
+    """A hand elsewhere in the picture must not explain the item disappearing."""
+    d = guiding_driver(cfg=GuidanceConfig(tones_enabled=False, hand_guidance_always=True))
+    far = det("hand", 0.9, cx=0.15, cy=0.15, w=0.15, h=0.15)
+    d.frames(3, det(cx=0.5, h=0.2), far, dt=0.1)
+    assert d.s.track.hand_offset is None
+    fx = d.frames(16, far, dt=0.1)
+    assert "lost" in keys(fx)
+
+
+def test_plain_loss_still_says_lost():
+    """Regression: with no hand and a still camera the old behaviour is unchanged."""
+    d = guiding_driver()
+    fx = d.frames(16, dt=0.1)
+    assert "lost" in keys(fx)
+    assert d.s.mode == Mode.SEARCHING
+
+
+def test_a_moving_camera_does_not_count_as_lost():
+    """A head turn hides the item for a moment; that is not a loss."""
+    d = guiding_driver()
+    fx = []
+    for _ in range(20):                      # 2 s of a moving view, item not visible
+        fx += d.send(frame(motion=0.02), dt=0.1)
+    assert "lost" not in keys(fx)
+    assert d.s.mode == Mode.GUIDING
+    # Once the view settles the normal lost time-out applies again.
+    fx = []
+    for _ in range(20):
+        fx += d.send(frame(), dt=0.1)
+    assert "lost" in keys(fx)
+
+
+def test_the_motion_freeze_cannot_hide_an_item_forever():
+    """The freeze is capped, so a permanently shaky view still ends in "Lost it."."""
+    d = guiding_driver()
+    fx = []
+    for _ in range(60):                      # 6 s of continuous motion
+        fx += d.send(frame(motion=0.08), dt=0.1)
+    assert "lost" in keys(fx)
+
+
+def test_camera_motion_does_not_block_a_grab():
+    """The ghost is anchored to the hand, so a moving background must not stop the check-off."""
+    d = guiding_driver(cfg=GuidanceConfig(tones_enabled=False, hand_guidance_always=True))
+    item = det(cx=0.5, h=0.4)
+    hand = det("hand", 0.9, cx=0.5, cy=0.55, w=0.2, h=0.2)
+    fx = []
+    for _ in range(7):                       # 0.7 s of holding while the view moves
+        fx += d.send(frame(item, hand, motion=0.02), dt=0.1)
+    assert "hand_on_item" in keys(fx)
+    assert d.s.items[0].status == FOUND
+

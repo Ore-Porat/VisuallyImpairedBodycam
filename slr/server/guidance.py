@@ -45,6 +45,8 @@ The events (things that happen):
                           "shutdown".
 - Frame(detections, ...)  The object detector has looked at one camera picture and this is the
                           list of boxes it found (each box = class name + confidence + position).
+                          It also carries ``motion``: how far the whole picture moved since the
+                          previous frame, so the engine can tell a head turn from a lost item.
 - Tick()                  Nothing happened, but time passed. Used to notice time-outs ("I lost
                           the item", "I still don't see it").
 
@@ -153,11 +155,15 @@ class Frame:
     purpose:    "find" (normal search stream) or "identify" (a burst for Identify mode).
     burst_id:   which identify burst this frame belongs to; 0 for find frames. Lets us ignore
                 late frames from an older burst.
+    motion:     estimated global camera motion since the previous frame, as a fraction of the
+                frame (0 = still). The camera is worn on the body, so this says how fast the
+                shopper is turning / walking. Server-side estimation only; the Pi sends none.
     """
 
     detections: tuple[Detection, ...] = ()
     purpose: str = "find"
     burst_id: int = 0
+    motion: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -256,6 +262,14 @@ class Tracking:
     closer_said_at:  when we last said "getting closer".
     hand_said / hand_said_at: the hand cue we last spoke and when (within reach only).
     hand_touch_since: when the hand first covered the item (must hold for a moment).
+    hand_offset:     (item center - hand center) recorded while both were visible. Combined
+                     with the live hand box this predicts where the item is when the hand
+                     hides it, and it follows the hand when the camera moves.
+    hand_ratio:      item height / hand height at that moment, so the ghost keeps its size.
+    ghost_box:       predicted item box while the hand covers it (None when not hidden).
+    ghost_since:     when the ghost was created, for the ``hand_ghost_max_s`` limit.
+    motion_until:    the camera was moving until this time. While set, a missing item is not
+                     treated as lost (the wearer is turning / walking).
     """
 
     history: tuple[Detection | None, ...] = ()
@@ -273,6 +287,11 @@ class Tracking:
     hand_said: str | None = None
     hand_said_at: float | None = None
     hand_touch_since: float | None = None
+    hand_offset: tuple[float, float] | None = None
+    hand_ratio: float | None = None
+    ghost_box: Detection | None = None
+    ghost_since: float | None = None
+    motion_until: float | None = None
 
 
 @dataclass(frozen=True)
@@ -426,15 +445,24 @@ def pick_hand(dets: tuple[Detection, ...], cfg: GuidanceConfig) -> Detection | N
 
 
 def hand_on_item(hand: Detection, item: Detection, cfg: GuidanceConfig) -> bool:
-    """True when the hand covers the item: its center is inside the item box, or at least
-    ``hand_touch_overlap`` of the hand box overlaps the item box."""
+    """True when the hand covers the item.
+
+    Three ways to count, because the two boxes can be very different sizes:
+    - the hand's center is inside the item box (a big item, a small hand),
+    - the hand box is mostly over the item (a hand about the item's size), or
+    - the item is mostly hidden behind the hand (a small item, a big hand).
+    The last one matters for small products: a hand can cover a can completely while the
+    hand box is much larger, so an "overlap / hand area" test alone would miss the grab.
+    """
     ix = max(0.0, min(hand.x2, item.x2) - max(hand.x1, item.x1))
     iy = max(0.0, min(hand.y2, item.y2) - max(hand.y1, item.y1))
-    area = hand.w * hand.h
-    if area <= 0:
-        return False
+    inter = ix * iy
+    hand_area = hand.w * hand.h
+    item_area = item.w * item.h
     inside = item.x1 <= hand.cx <= item.x2 and item.y1 <= hand.cy <= item.y2
-    return inside or (ix * iy) / area >= cfg.hand_touch_overlap
+    over_hand = hand_area > 0 and inter / hand_area >= cfg.hand_touch_overlap
+    over_item = item_area > 0 and inter / item_area >= cfg.hand_touch_overlap
+    return inside or over_hand or over_item
 
 
 def hand_direction(hand: Detection, item: Detection, cfg: GuidanceConfig) -> str:
@@ -451,6 +479,42 @@ def hand_direction(hand: Detection, item: Detection, cfg: GuidanceConfig) -> str
     if not h and not v:
         return "hand_forward"
     return "hand_" + "_".join(p for p in (v, h) if p)
+
+
+def hand_anchor(item: Detection, hand: Detection,
+                cfg: GuidanceConfig) -> tuple[tuple[float, float], float] | None:
+    """Record where the item sits relative to the hand, while both are visible.
+
+    Returns ``(offset, height_ratio)`` or None when the pair is not usable: the hand must
+    actually be covering the item (``hand_on_item``) and the size ratio must be plausible.
+    Requiring real coverage is what keeps a passing hand from anchoring a ghost.
+    """
+    if not hand_on_item(hand, item, cfg):
+        return None
+    if hand.h <= 0 or item.h <= 0:
+        return None
+    ratio = item.h / hand.h
+    if not cfg.hand_ghost_min_ratio <= ratio <= cfg.hand_ghost_max_ratio:
+        return None
+    dx, dy = item.cx - hand.cx, item.cy - hand.cy
+    if (dx * dx + dy * dy) ** 0.5 > cfg.hand_ghost_max_offset:
+        return None
+    return (dx, dy), ratio
+
+
+def ghost_from_hand(cls: str, hand: Detection, offset: tuple[float, float],
+                    ratio: float) -> Detection:
+    """Predict the hidden item's box from the hand's current position.
+
+    The prediction is ``hand + offset``, so it moves with the hand (and therefore with the
+    wearer's head / body). The box is clamped to the frame so tone panning stays in range.
+    """
+    cx = min(1.0, max(0.0, hand.cx + offset[0]))
+    cy = min(1.0, max(0.0, hand.cy + offset[1]))
+    w = max(0.01, hand.w * ratio)
+    h = max(0.01, hand.h * ratio)
+    return Detection(cls=cls, conf=hand.conf, x1=cx - w / 2, y1=cy - h / 2,
+                     x2=cx + w / 2, y2=cy + h / 2)
 
 
 def select_target(dets: tuple[Detection, ...], target: str | None, last_box: Detection | None,
@@ -948,17 +1012,41 @@ def _on_frame(s: State, f: Frame, now: float, cfg: GuidanceConfig) -> tuple[Stat
     if s.mode not in FIND_MODES or f.purpose != "find" or s.target is None:
         return s, []
 
-    # Which box (if any) is our target in this frame?
-    det = select_target(f.detections, s.target, s.track.last_box, cfg)
+    # Which box (if any) is our target in this frame? While the hand hides the item, the
+    # ghost is the best "where it was" hint, so use it to follow the same object.
+    hint = s.track.ghost_box if s.track.ghost_box is not None else s.track.last_box
+    det = select_target(f.detections, s.target, hint, cfg)
     # Slide the sighting history window: append this result, keep only the last stable_n.
     track = replace(s.track, history=(s.track.history + (det,))[-cfg.stable_n:])
-    if det is not None:
-        track = replace(track, last_seen_at=now, last_box=det)
-    s = replace(s, track=track)
-
     # A visible hand takes priority over camera-direction speech when hand guidance is allowed
     # early: compare the hand center with the item center and say which way to move the hand.
     hand = pick_hand(f.detections, cfg) if cfg.hand_guidance_enabled else None
+
+    # Camera-motion gate: a wearable camera moves with the shopper's head. While the picture
+    # moves, "I cannot see it" is weak evidence, so do not let it count as a loss. (The
+    # hand hold is deliberately NOT reset here: the ghost is anchored to the hand, so the
+    # hand/item relationship stays valid while the background moves.)
+    if cfg.camera_motion_freeze > 0 and f.motion >= cfg.camera_motion_freeze:
+        track = replace(track, motion_until=now + cfg.camera_motion_settle_s)
+        # Keep a ghost alive while the view is moving; its clock restarts once it settles.
+        if track.ghost_box is not None:
+            track = replace(track, ghost_since=now)
+
+    if det is not None:
+        # Seen for real: any ghost is obsolete, and the box is now the truth.
+        track = replace(track, last_seen_at=now, last_box=det,
+                        ghost_box=None, ghost_since=None)
+        # Remember where the item sits relative to the hand while both are visible, so a
+        # prediction can follow the hand once the item disappears behind it. A detected
+        # hand that is NOT on the item clears the anchor: the stored geometry would be
+        # wrong, and the plain last box is a safer fallback.
+        if hand is not None and cfg.hand_ghost_enabled:
+            anchor = hand_anchor(det, hand, cfg)
+            track = replace(track,
+                            hand_offset=anchor[0] if anchor is not None else None,
+                            hand_ratio=anchor[1] if anchor is not None else None)
+    s = replace(s, track=track)
+
     speak_directions = not (hand is not None and cfg.hand_guidance_always)
 
     if s.mode == Mode.SEARCHING:
@@ -978,16 +1066,54 @@ def _on_frame(s: State, f: Frame, now: float, cfg: GuidanceConfig) -> tuple[Stat
         # Not found yet: maybe a different list item is right in front of the camera.
         return _check_wrong_item(s, f, det, now, cfg)
 
-    # GUIDING or WITHIN_REACH: nothing to say if the target is not in this frame
-    # (the lost time-out in _timers handles a long absence).
     if det is None:
-        return s, []
+        # The target vanished from this frame. If the shopper's hand is over it, keep a
+        # predicted box and carry on: a grab must not sound like a loss.
+        track = _occlusion_track(track, hand, now, cfg)
+        s = replace(s, track=track)
+        ghost = track.ghost_box
+        if ghost is None:
+            # Nothing predicts the item: the lost time-out in _timers handles the absence.
+            return s, []
+        fx = []
+        # Keep the beep pointed at the hidden item (it is where the hand is).
+        s, tfx = _update_tone(s, ghost, cfg)
+        fx += tfx
+        if hand is not None and (cfg.hand_guidance_always or s.mode == Mode.WITHIN_REACH):
+            s, hfx = _guide_hand(s, f, ghost, now, cfg, hand=hand)
+            fx += hfx
+        return s, fx
+
     s, fx = _guide(s, det, now, cfg, acquired=False, speak_directions=speak_directions)
     # Hand cues start as soon as both boxes are visible when hand_guidance_always is on.
     if hand is not None and (cfg.hand_guidance_always or s.mode == Mode.WITHIN_REACH):
         s, hfx = _guide_hand(s, f, det, now, cfg, hand=hand)
         fx += hfx
     return s, fx
+
+
+def _occlusion_track(t: Tracking, hand: Detection | None, now: float,
+                     cfg: GuidanceConfig) -> Tracking:
+    """Refresh the predicted "ghost" box while the shopper's hand covers the target.
+
+    The ghost is the last real item box carried along with the hand (``hand + offset``), so
+    it follows the wearer's head / body movement. When we never recorded a clean anchor the
+    last real box is kept instead, which is fine while the camera is still.
+
+    A ghost is only kept while the hand actually overlaps it. As soon as the hand moves off
+    it, the item really is missing and the normal lost time-out applies.
+    """
+    if not cfg.hand_ghost_enabled or hand is None or t.last_box is None:
+        return replace(t, ghost_box=None, ghost_since=None, hand_touch_since=None)
+    if t.hand_offset is not None and t.hand_ratio is not None:
+        box = ghost_from_hand(t.last_box.cls, hand, t.hand_offset, t.hand_ratio)
+    else:
+        box = t.last_box
+    if not hand_on_item(hand, box, cfg):
+        return replace(t, ghost_box=None, ghost_since=None, hand_touch_since=None)
+    # Keep the original creation time; the motion gate refreshes it while the view moves.
+    since = t.ghost_since if t.ghost_since is not None else now
+    return replace(t, ghost_box=box, ghost_since=since)
 
 
 def _guide_hand(s: State, f: Frame, item: Detection, now: float,
@@ -1136,16 +1262,31 @@ def _timers(s: State, now: float, cfg: GuidanceConfig) -> tuple[State, list[Effe
     """Time-based rules, checked after EVERY event (including plain Ticks).
 
     1. Lost: while guiding, the target has not been seen for lost_timeout_s -> back to SEARCHING.
+       A hand covering the item (``ghost_box``) or a moving camera postpones this, because a
+       grab or a head turn is not a loss. Both explanations expire, so the item cannot stay
+       "hidden" forever.
     2. Not seeing: while searching, nothing for not_found_prompt_s -> remind "I don't see X".
     3. Identify time-out: the burst never completed -> finish with whatever votes we have.
     """
     fx: list[Effect] = []
-    if s.mode in TRACKING_MODES and s.track.last_seen_at is not None \
-            and now - s.track.last_seen_at > cfg.lost_timeout_s:
-        s, tfx = _stop_tone(s)
-        s = replace(s, mode=Mode.SEARCHING, track=Tracking(), other_history=(), search_ref=now,
-                    not_found_said_at=None)
-        fx += tfx + [say("lost", interrupt=True)]
+    if s.mode in TRACKING_MODES and s.track.last_seen_at is not None:
+        hidden = now - s.track.last_seen_at
+        if hidden > cfg.lost_timeout_s:
+            frozen = s.track.motion_until is not None and now < s.track.motion_until
+            covered = (s.track.ghost_box is not None and s.track.ghost_since is not None
+                       and now - s.track.ghost_since <= cfg.hand_ghost_max_s
+                       # Also bound the total time: a hand detector that flickers must not
+                       # keep recreating the ghost and hide a missing item forever.
+                       and hidden <= cfg.lost_timeout_s + cfg.hand_ghost_max_s)
+            # A hand over the item is a positive explanation and is bounded by
+            # hand_ghost_max_s. The camera-motion excuse is weaker, so it is capped too:
+            # a permanently shaky view still ends in "Lost it.".
+            motion_ok = frozen and hidden <= cfg.lost_timeout_s + cfg.camera_motion_max_freeze_s
+            if not (covered or motion_ok):
+                s, tfx = _stop_tone(s)
+                s = replace(s, mode=Mode.SEARCHING, track=Tracking(), other_history=(),
+                            search_ref=now, not_found_said_at=None)
+                fx += tfx + [say("lost", interrupt=True)]
 
     if s.mode == Mode.SEARCHING and s.search_ref is not None \
             and now - s.search_ref >= cfg.not_found_prompt_s \

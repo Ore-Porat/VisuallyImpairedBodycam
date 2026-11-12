@@ -112,12 +112,31 @@ guidance:
   # item off when the hand covers it.
   hand_guidance_enabled: true
   hand_guidance_always: true # start hand cues as soon as a hand and the target are visible
-  hand_conf: 0.5             # guidance floor; fast_hand_conf 0.30 keeps lower-confidence boxes
+  hand_conf: 0.5             # engine-side floor; the detector already filters at fast_hand_conf 0.55
   hand_cue_tol: 0.08         # hand within this of the item center (frame fraction) = aligned
   hand_touch_overlap: 0.3    # share of the hand box that must overlap the item to count as touching
   hand_touch_hold_s: 0.5     # ... held this long before "That's it."
   hand_repeat_s: 1.5         # repeat an unchanged hand cue this often
   hand_auto_check_off: true  # "That's it." also checks the item off (false: press the shutter)
+
+  # Object permanence while the hand covers the item (needs hand_guidance_enabled, because
+  # the hand box is the anchor). A detector cannot see through the hand, so the item box
+  # disappears exactly when the grab succeeds. The engine keeps a predicted "ghost" box
+  # anchored to the hand (which moves with the wearer), so a grab is not mistaken for a
+  # lost item.
+  hand_ghost_enabled: true
+  hand_ghost_max_s: 1.2      # how long a hand-covered item may stay invisible
+  hand_ghost_max_offset: 0.15  # secondary bound: hand center this close to the item center
+  hand_ghost_min_ratio: 0.25 # sanity bounds on item height / hand height
+  hand_ghost_max_ratio: 4.0
+
+  # Camera-motion gate. The camera is worn on the body, so the picture moves whenever the
+  # shopper turns or walks. While it moves, a missing item is not evidence of a loss:
+  # freeze the "Lost it." timer until the view settles. (A grab is not affected: the
+  # predicted box is anchored to the hand, not to the background.)
+  camera_motion_freeze: 0.008   # frame-to-frame shift (fraction of the frame) that means "moving"
+  camera_motion_settle_s: 0.3   # keep the freeze this long after the picture stops moving
+  camera_motion_max_freeze_s: 2.0  # never extend the lost timer by more than this
 
   # Panned guidance tone (FR-21)
   # A beep in the headphones that comes from the target's side and speeds up as you get close.

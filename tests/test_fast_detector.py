@@ -86,7 +86,7 @@ def test_shipped_config_uses_fast_grocery():
     assert cfg.model.fast_detector_engine == "models/tensorrt/shelf_world_s.engine"
     assert cfg.model.fast_hand_engine == "models/tensorrt/hand_egohands_960.engine"
     assert cfg.model.fast_hand_imgsz == 960
-    assert cfg.model.fast_hand_conf == 0.30
+    assert cfg.model.fast_hand_conf == 0.55
     assert cfg.model.fast_clip_half is True
     assert cfg.model.active_model == cfg.model.fast_detector_engine
 

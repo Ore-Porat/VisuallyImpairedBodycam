@@ -257,6 +257,35 @@ class GuidanceConfig(_Model):
     hand_repeat_s: float = 1.5      # repeat an unchanged hand cue this often
     hand_auto_check_off: bool = True  # "That's it." also checks the item off
 
+    # Object permanence while the hand covers the item (the camera is worn on the body).
+    # A detector cannot see an item through the shopper's hand, so the box disappears at the
+    # exact moment of the grab. Instead of treating that as "lost", keep a predicted "ghost"
+    # box anchored to the hand. Because the hand moves with the wearer, the prediction also
+    # follows the item when the head / body moves.
+    hand_ghost_enabled: bool = True
+    hand_ghost_max_s: float = 1.2     # how long a hand-covered item may stay invisible
+    # The anchor is only recorded while the hand actually covers the item (`hand_on_item`);
+    # this is a secondary bound on how far its center may be from the item's center then
+    # (normalized frame units), so a huge, sloppy overlap cannot anchor a wild prediction.
+    hand_ghost_max_offset: float = 0.15
+    hand_ghost_min_ratio: float = 0.25  # sanity bounds on item height / hand height
+    hand_ghost_max_ratio: float = 4.0
+
+    # Camera-motion gate (wearable camera). While the picture is moving, a missing item is
+    # weak evidence: freeze the "lost" time-out until the view settles, so a natural head
+    # turn during a grab does not sound like a failure. ``camera_motion_freeze`` is the
+    # estimated frame-to-frame shift as a fraction of the frame (0.008 is about 5 pixels
+    # per frame at 640x480, or 10% of the frame per second at 20 fps).
+    #
+    # The "That's it." hold is NOT reset while the camera moves: the predicted box is
+    # anchored to the hand, so the hand/item relationship stays valid even when the
+    # background moves. Resetting it would make grabs fail during normal body sway.
+    camera_motion_freeze: float = 0.008
+    camera_motion_settle_s: float = 0.3  # keep the freeze this long after motion stops
+    # The freeze can only explain a short absence; after lost_timeout_s + this the item is
+    # reported lost even if the camera is still moving.
+    camera_motion_max_freeze_s: float = 2.0
+
     # Optional beeps that speed up as the item gets closer and pan left/right with it.
     tones_enabled: bool = True
     tone_freq_hz: int = 880
@@ -306,6 +335,18 @@ class GuidanceConfig(_Model):
                 raise ValueError(f"{name} must be in (0, 1]")
         if not 0 <= self.hand_cue_tol < 0.5:
             raise ValueError("need 0 <= hand_cue_tol < 0.5")
+        if not 0 < self.hand_ghost_max_s <= 10:
+            raise ValueError("need 0 < hand_ghost_max_s <= 10")
+        if not 0 <= self.hand_ghost_max_offset <= 0.5:
+            raise ValueError("need 0 <= hand_ghost_max_offset <= 0.5")
+        if not 0 < self.hand_ghost_min_ratio < self.hand_ghost_max_ratio <= 20:
+            raise ValueError("need 0 < hand_ghost_min_ratio < hand_ghost_max_ratio <= 20")
+        if not 0 <= self.camera_motion_freeze <= 0.5:
+            raise ValueError("need 0 <= camera_motion_freeze <= 0.5")
+        if not 0 <= self.camera_motion_settle_s <= 5:
+            raise ValueError("need 0 <= camera_motion_settle_s <= 5")
+        if not 0 <= self.camera_motion_max_freeze_s <= 20:
+            raise ValueError("need 0 <= camera_motion_max_freeze_s <= 20")
         return self
 
 

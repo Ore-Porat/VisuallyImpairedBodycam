@@ -17,7 +17,8 @@ running at the same time:
 - ``SessionLog``     (session_log.py)     the JSONL diary of everything that happened
 
 The flow for one camera frame: UDP packet arrives -> ``_process_frame`` runs the detector in a
-worker thread -> ``dispatch`` feeds a ``Frame`` event to the engine -> any resulting messages are
+worker thread (and estimates camera motion from the decoded picture) -> ``dispatch`` feeds a
+``Frame`` event to the engine -> any resulting messages are
 queued -> ``_sender`` makes sure the speech clip exists and sends the message to the Pi.
 
 WORDS YOU WILL SEE
@@ -62,6 +63,7 @@ from slr.server.core import ServerCore
 from slr.server.detector import Detector, decode_jpeg, load_detector, timed_detect
 from slr.server.frame_receiver import FrameReceiver, ReceivedFrame
 from slr.server.list_web import HttpServer, make_handler
+from slr.server.motion import MotionEstimator
 from slr.server.session import ListError, ShoppingList
 from slr.server.session_log import SessionLog
 
@@ -132,6 +134,9 @@ class ServerApp:
         # One dedicated worker thread for the detector (loading and running a model is slow
         # and must not freeze the event loop).
         self.det_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="detector")
+        # Measures how far the whole picture moved since the previous frame, so the guidance
+        # engine can tell a head turn from a lost item (Frame.motion).
+        self.motion = MotionEstimator()
         if self.detector is None:
             self.detector = await self.loop.run_in_executor(self.det_pool, load_detector, cfg)
         if hasattr(self.detector, "warmup"):
@@ -273,17 +278,24 @@ class ServerApp:
     # ------------------------------------------------------------------ frames
 
     def _detect(self, jpeg: bytes):
-        """Runs in the detector thread: decode the JPEG and run the model. Returns
-        (image, detections, inference ms); image is None if the JPEG was corrupt."""
+        """Runs in the detector thread: decode the JPEG and run the model.
+
+        Returns (image, detections, inference ms, camera motion); image is None if the JPEG
+        was corrupt and motion is 0.0 when it could not be estimated.
+        """
         img = decode_jpeg(jpeg)
         if img is None:
-            return None, [], 0.0
+            return None, [], 0.0, 0.0
+        # Estimate how far the picture moved since the last frame (cheap; must run on the
+        # same thread as the detector so ``MotionEstimator`` sees frames in order).
+        motion = self.motion.update(img)
         dets, ms = timed_detect(self.detector, img)
-        return img, dets, ms
+        return img, dets, ms, motion
 
     async def _process_frame(self, fr: ReceivedFrame) -> float:
         """Called by the FrameReceiver for each new picture. Returns inference time in ms."""
-        img, dets, infer_ms = await self.loop.run_in_executor(self.det_pool, self._detect, fr.jpeg)
+        img, dets, infer_ms, motion = await self.loop.run_in_executor(
+            self.det_pool, self._detect, fr.jpeg)
         h = fr.header
         # Convert the Pi's capture time into the laptop's clock using the heartbeat offset.
         capture_ts = h.capture_ts_ms / 1000 + self.clock_offset_s
@@ -291,14 +303,15 @@ class ServerApp:
             "frame", frame_id=h.frame_id, session_id=h.session_id, purpose=h.purpose_name,
             burst_id=h.burst_id, capture_ts=round(capture_ts, 4), recv_ts=round(fr.recv_ts, 4),
             infer_ms=round(infer_ms, 1), jpeg_bytes=len(fr.jpeg), size=[h.width, h.height],
-            detections=[d.to_dict() for d in dets])
-        self.dispatch(g.Frame(tuple(dets), h.purpose_name, h.burst_id), origin_ts=capture_ts)
+            motion=round(motion, 4), detections=[d.to_dict() for d in dets])
+        self.dispatch(g.Frame(tuple(dets), h.purpose_name, h.burst_id, motion),
+                      origin_ts=capture_ts)
         # Keep the last 2 seconds of frame times to show frames-per-second in the debug view.
         now = time.time()
         self._frame_times = [t for t in self._frame_times if now - t < 2.0] + [now]
         if self.debug and img is not None:
             self.debug.update(image=img, detections=dets, infer_ms=infer_ms,
-                              fps=len(self._frame_times) / 2.0, loss=self.loss)
+                              fps=len(self._frame_times) / 2.0, loss=self.loss, motion=motion)
         return infer_ms
 
     # ------------------------------------------------------------------ control channel

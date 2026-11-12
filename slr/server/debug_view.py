@@ -65,6 +65,7 @@ class DebugInfo:
     loss: float | None = None
     fps: float = 0.0
     item: str = ""
+    motion: float = 0.0
 
 
 class DebugView:
@@ -137,7 +138,7 @@ class DebugView:
         lines = [
             f"mode: {info.mode}   target: {info.target or '-'}   item: {info.item}",
             f"infer {info.infer_ms:.0f} ms   e2e {lat}   fps {info.fps:.1f}   udp loss {loss}",
-            f"cue: {info.last_cue}",
+            f"motion: {info.motion:.3f}   cue: {info.last_cue}",
             "f = save frame",
         ]
         # A black bar, 22 pixels per text line, drawn under the picture.

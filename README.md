@@ -4,7 +4,7 @@ A vintage SLR film camera, worn on a neck strap, retrofitted with a Raspberry Pi
 USB camera. It helps blind and low-vision shoppers find the right item on a shelf, hands free,
 using only audio:
 
-- **Find mode** guides you to an item on your shopping list: *"Pasta found. Slightly left. Eye level."* ... *"Hand up and left."* ... *"Reach forward."* ... *"That's it. Pasta checked off."* Hand cues start as soon as both your hand and the item are visible (the model must have the `hand` class; see `guidance.hand_guidance_enabled` and `hand_guidance_always`).
+- **Find mode** guides you to an item on your shopping list: *"Pasta found. Slightly left. Eye level."* ... *"Hand up and left."* ... *"Reach forward."* ... *"That's it. Pasta checked off."* Hand cues start as soon as both your hand and the item are visible (the model must have the `hand` class; see `guidance.hand_guidance_enabled` and `hand_guidance_always`). When your hand covers the item the guidance keeps a predicted box instead of saying "Lost it.", and a head turn does not count as a loss either (`guidance.hand_ghost_*`, `guidance.camera_motion_*`).
 - **Identify mode** tells you what is in front of the camera: *"This is coffee. It's on your list."* or *"I see pasta, milk, and rice."* (up to `guidance.identify_max_objects`).
 
 Team #4 Colorado Dreaming, GEEN 1400 Fall 2026. The product spec is [`PRD.pdf`](PRD.pdf);
@@ -196,6 +196,14 @@ and set `camera.index` in `config/device.yaml`.
 - **Hand cues:** if "Hand left" and "Hand right" come out swapped, `flip_horizontal` fixes both the
   shelf and the hand cues. Raise `guidance.hand_cue_tol` if the cues flip-flop while the hand is
   nearly on the item; lower `hand_touch_overlap` if "That's it" never comes.
+- **Hand occlusion:** while the hand covers the current item the engine keeps a predicted box
+  (`guidance.hand_ghost_*`) instead of reporting it lost. If a grab still says "Lost it.", raise
+  `hand_ghost_max_s`; if a hand hovering over the shelf hides a genuinely missing item for too long,
+  lower it. `hand_ghost_max_offset` decides how close the hand must have been to the item.
+- **Head turns:** a moving camera does not count as a loss (see `guidance.camera_motion_*`). If turning
+  your head still says "Lost it.", lower `camera_motion_freeze` (0.008 = about 5 px per frame at
+  640x480); if ordinary sway keeps it too quiet, raise it. The debug view's `motion:` readout shows
+  the current estimate. `camera_motion_max_freeze_s` caps how long motion can postpone the message.
 - **Mirrored camera:** set `guidance.flip_horizontal: true` if "left" and "right" come out swapped.
 - **Confidence:** `training/pick_threshold.py --write` sets `guidance.conf_find` from held-out photos (TR-14).
 
