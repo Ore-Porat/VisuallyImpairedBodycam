@@ -56,7 +56,7 @@ from websockets.asyncio.server import ServerConnection, serve
 
 from slr import __version__
 from slr.common import protocol as p
-from slr.common.config import ServerConfig, item_classes, load_classes
+from slr.common.config import ServerConfig, load_catalog
 from slr.server import guidance as g
 from slr.server.clips import ClipStore, PhraseCatalog, make_tts, voice_tag
 from slr.server.core import ServerCore
@@ -114,18 +114,21 @@ class ServerApp:
         """Load everything and open all the network ports. Called once."""
         cfg = self.cfg
         self.loop = asyncio.get_running_loop()
-        # Class id -> spoken name, from config/classes.yaml.
-        self.classes = load_classes(cfg.path(cfg.model.classes_file))
+        # Items, spoken names and CLIP prompts. Items the user added are merged in from
+        # data/catalog_user.yaml (it may not exist yet).
+        self.items_catalog = load_catalog(cfg.path(cfg.model.catalog_file),
+                                          cfg.path(cfg.paths.user_catalog))
+        self.classes = self.items_catalog.spoken_map()
         self.tts = make_tts(cfg.tts, cfg)
         log.info("TTS engine: %s", self.tts.name)
         self.catalog = PhraseCatalog.load(cfg.root / "config" / "phrases.yaml", self.classes,
                                           voice_tag(cfg.tts, self.tts))
         self.clips = ClipStore(cfg.path(cfg.paths.clips_dir), self.tts)
         # The list (and its web editor) only offers real items: the hand class is left out.
-        self.item_classes = item_classes(self.classes, cfg.guidance.non_item_classes)
-        self.shopping = ShoppingList(cfg.path(cfg.paths.shopping_list), self.item_classes)
-        for name in self.shopping.unknown_items():
-            log.warning("shopping list item %r is not a class of the loaded model", name)
+        self.item_classes = self.items_catalog.item_map()
+        self.shopping = ShoppingList(cfg.path(cfg.paths.shopping_list), self.items_catalog)
+        for item_id in self.shopping.uncurated_items():
+            log.warning("list item %r has no curated prompts; using generated ones", item_id)
         self.session_log = SessionLog(cfg.path(cfg.paths.logs_dir))
         self.core = ServerCore(cfg.guidance, self.catalog, self.shopping, self.session_log)
         self.session_log.write("server_start", version=__version__, model=cfg.model.active_model,
@@ -139,14 +142,11 @@ class ServerApp:
         self.motion = MotionEstimator()
         if self.detector is None:
             self.detector = await self.loop.run_in_executor(self.det_pool, load_detector, cfg)
+        # Tell the detector which items are on the list before warmup, so its prompt bank
+        # is built once at startup instead of on the first real frame.
+        self._sync_detector_items()
         if hasattr(self.detector, "warmup"):
             await self.loop.run_in_executor(self.det_pool, self.detector.warmup)
-        # Warn if the classes file mentions things the model cannot actually detect.
-        model_names = set(getattr(self.detector, "names", []))
-        missing = [c for c in self.classes if model_names and c not in model_names]
-        if missing:
-            log.warning("classes file lists %d classes the model does not know, e.g. %s",
-                        len(missing), missing[:5])
 
         # pre-render list phrases now, every class in the background (FR-60)
         threading.Thread(target=self._prerender, name="prerender", daemon=True).start()
@@ -159,7 +159,9 @@ class ServerApp:
         log.info("WebSocket control channel on %s:%d", cfg.network.host, cfg.network.ws_port)
 
         # The small HTTP server: clip downloads for the device + the list editor page.
-        handler = make_handler(self._page_data, self._list_op_threadsafe, self.clips.manifest, self.clips.path)
+        handler = make_handler(self._page_data, self._list_op_threadsafe, self.clips.manifest,
+                               self.clips.path, self._prompts_data_threadsafe,
+                               self._prompt_op_threadsafe)
         self.http = HttpServer(cfg.network.host, cfg.network.http_port, handler)
         self.http.start()
         log.info("clips + list editor on http://%s:%d/", cfg.network.host, cfg.network.http_port)
@@ -250,7 +252,14 @@ class ServerApp:
             if n % 5 == 0 and self.shopping.changed_on_disk():  # CLI edited the list
                 self.shopping.load()
                 self.core.reload_list()
+                self._sync_detector_items()
                 log.info("shopping list reloaded from disk")
+                threading.Thread(target=self._prerender, daemon=True).start()
+            if n % 5 == 0 and self.items_catalog.changed_on_disk():  # CLI added an item
+                self.items_catalog.reload_user()
+                self._refresh_vocabulary()
+                self._sync_detector_items()
+                log.info("user item catalog reloaded from disk")
                 threading.Thread(target=self._prerender, daemon=True).start()
 
     async def _sender(self) -> None:
@@ -388,9 +397,31 @@ class ServerApp:
 
     # ------------------------------------------------------------------ list editor (FR-4)
 
+    def _detector_items(self):
+        """Catalog entries for the current shopping list (ids the detector should score)."""
+        return self.items_catalog.items_for([it.name for it in self.shopping.items])
+
+    def _sync_detector_items(self) -> None:
+        """Push the current list to the detector. The prompt bank rebuilds on the next frame."""
+        setter = getattr(self.detector, "set_items", None)
+        if setter is not None:
+            setter(self._detector_items())
+
+    def _refresh_vocabulary(self) -> None:
+        """Re-read names after the catalog changed (a free-text item or an edit).
+
+        ``PhraseCatalog`` keeps its own id -> spoken map, so new items must be copied into it
+        before their phrases can be rendered.
+        """
+        self.classes = self.items_catalog.spoken_map()
+        self.item_classes = self.items_catalog.item_map()
+        self.shopping.refresh_known()
+        self.catalog.classes = self.classes
+
     def _page_data(self):
-        """Data for the web page: (items, current index, class id -> spoken name)."""
-        return list(self.shopping.items), self.shopping.current, self.item_classes
+        """Data for the web page: (items, current index, id -> spoken name, uncurated ids)."""
+        return (list(self.shopping.items), self.shopping.current, self.item_classes,
+                set(self.shopping.uncurated_items()))
 
     def _list_op_threadsafe(self, op: str, arg: str) -> str:
         """Called from the HTTP server's thread: run ``_list_op`` on the event loop and wait."""
@@ -404,11 +435,16 @@ class ServerApp:
         """
         sp = self.shopping
         if op == "add":
-            cls = sp.add(arg)
-            msg = f"Added {self.classes.get(cls, cls)}."
+            cls = sp.add(arg)                   # a new name becomes a catalog item
+            self._refresh_vocabulary()
+            spoken = self.items_catalog.spoken(cls)
+            msg = f"Added {spoken}."
+            if cls in sp.uncurated_items():
+                msg += (" It uses generated prompts; edit them on the Prompts page for better"
+                        " accuracy.")
         elif op == "remove":
             cls = sp.remove(arg)
-            msg = f"Removed {self.classes.get(cls, cls)}."
+            msg = f"Removed {self.items_catalog.spoken(cls)}."
         elif op == "clear":
             sp.clear()
             msg = "Removed every item."
@@ -420,12 +456,67 @@ class ServerApp:
             if not 0 <= idx < len(sp.items):
                 raise ListError("no such item")
             sp.set_state(tuple(sp.items), idx)
-            msg = f"Current item is now {self.classes.get(sp.items[idx].name, sp.items[idx].name)}."
+            msg = f"Current item is now {self.items_catalog.spoken(sp.items[idx].name)}."
         else:
             raise ListError(f"unknown list operation {op!r}")
         # Tell the engine about the new list and render any new phrases in the background.
         self.core.reload_list()
+        self._sync_detector_items()
         threading.Thread(target=self._prerender, daemon=True).start()
+        return msg
+
+    # ------------------------------------------------------------------ prompt editor
+
+    def _prompts_data_threadsafe(self):
+        """Called from the HTTP thread: read the catalog on the event loop (no race)."""
+        fut = asyncio.run_coroutine_threadsafe(self._prompts_data_async(), self.loop)
+        return fut.result(timeout=10)
+
+    async def _prompts_data_async(self):
+        return self._prompts_data()
+
+    def _prompts_data(self):
+        """Everything the prompt editor needs: every catalog item plus anything on the list."""
+        on_list = [it.name for it in self.shopping.items]
+        ids = list(self.items_catalog.item_ids)
+        for item_id in on_list:
+            if item_id not in ids:
+                ids.append(item_id)
+        out = []
+        for item_id in ids:
+            item = self.items_catalog.items_for([item_id])[0]
+            preset = self.items_catalog.preset.get(item_id)
+            out.append({
+                "id": item_id,
+                "spoken": item.spoken,
+                "on_list": item_id in on_list,
+                "preset": preset is not None,
+                "override": item_id in self.items_catalog.user and preset is not None,
+                "user_only": item_id in self.items_catalog.user and preset is None,
+                "prompts": list(self.items_catalog.prompts_for(item)),
+                "generated": not item.prompts,
+                "preset_prompts": list(preset.prompts) if preset else [],
+            })
+        return out
+
+    def _prompt_op_threadsafe(self, item_id: str, text: str, action: str) -> str:
+        """Called from the HTTP server's thread: run ``_prompt_op`` on the event loop."""
+        fut = asyncio.run_coroutine_threadsafe(self._prompt_op(item_id, text, action), self.loop)
+        return fut.result(timeout=10)
+
+    async def _prompt_op(self, item_id: str, text: str, action: str) -> str:
+        """Save or restore an item's CLIP prompts, then refresh the detector's prompt bank."""
+        if action == "restore":
+            self.items_catalog.restore_prompts(item_id)
+            msg = f"Restored the default prompts for {self.items_catalog.spoken(item_id)}."
+        elif action == "save":
+            prompts = [line.strip() for line in text.splitlines() if line.strip()]
+            self.items_catalog.set_prompts(item_id, prompts)
+            msg = f"Saved {len(prompts)} prompt(s) for {self.items_catalog.spoken(item_id)}."
+        else:
+            raise ValueError(f"unknown prompt action {action!r}")
+        self._refresh_vocabulary()
+        self._sync_detector_items()
         return msg
 
 

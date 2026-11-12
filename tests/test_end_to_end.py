@@ -34,8 +34,10 @@ import asyncio
 import pytest
 
 from slr.common.config import load_controls_config, load_device_config, load_server_config
+from slr.common.types import Detection
 from slr.device.camera import FileCamera
 from slr.device.main import DeviceApp
+from slr.server.detector import ScriptedDetector
 from slr.server.main import ServerApp
 
 
@@ -57,14 +59,13 @@ def configs(tmp_path):
     scfg.network.host = "127.0.0.1"
     scfg.network.mdns = False
     scfg.tts.engines = ["beep"]
-    # The scripted detector below reports grocery classes (pasta, coffee), so use the grocery
-    # class list whatever model config/server.yaml currently ships with.
-    scfg.model.classes_file = "config/classes.yaml"
+    # The scripted detector reports grocery ids; the shipped catalog contains them.
     # This test checks the manual Enter flow and the on-demand stream.
     scfg.guidance.stream_in_idle = False
     scfg.guidance.auto_find_on_mode_on = False
     # Keep every file the server writes inside the throw-away temporary folder.
     scfg.paths.shopping_list = str(tmp_path / "list.yaml")
+    scfg.paths.user_catalog = str(tmp_path / "catalog_user.yaml")
     scfg.paths.clips_dir = str(tmp_path / "clips")
     scfg.paths.logs_dir = str(tmp_path / "logs")
     scfg.debug_view.enabled = False
@@ -162,4 +163,62 @@ async def test_device_reconnects_after_server_restart(configs, frames_dir, scrip
         device.stopping.set()
         await asyncio.sleep(0.2)
         task.cancel()
+        await server.stop()
+
+
+class RecordingDetector(ScriptedDetector):
+    """A scripted detector that remembers the list it was asked to look for."""
+
+    def __init__(self):
+        super().__init__(frames=[[Detection("pasta", 0.9, 0.4, 0.4, 0.6, 0.6)]],
+                         names=["pasta", "coffee"])
+        self.items = []
+
+    def set_items(self, items):
+        self.items = list(items)
+
+
+async def test_list_edits_update_the_detector_prompt_set(configs):
+    """The detector must score only the current list, without a server restart.
+
+    This is the wiring between the shopping list and the prompt bank: add an item and the
+    detector is told; remove it and the detector is told again. The CLIP work itself happens
+    on the detector thread at the next frame.
+    """
+    scfg, _, _ = configs
+    detector = RecordingDetector()
+    server = ServerApp(scfg, detector=detector, debug_view=False)
+    await server.start()
+    try:
+        assert detector.items == []                     # empty list at startup
+        await server._list_op("add", "pasta")
+        assert [item.id for item in detector.items] == ["pasta"]
+        await server._list_op("add", "coffee")
+        assert [item.id for item in detector.items] == ["pasta", "coffee"]
+        await server._list_op("remove", "pasta")
+        assert [item.id for item in detector.items] == ["coffee"]
+        await server._list_op("clear", "")
+        assert detector.items == []
+
+        # Free text becomes a catalog item without a restart, and the detector is told.
+        await server._list_op("add", "Blue Gatorade")
+        assert [item.id for item in detector.items] == ["blue_gatorade"]
+        assert detector.items[0].prompts == ()          # generated prompt
+        assert server.items_catalog.user_path.exists()
+
+        # Editing prompts rebuilds the detector's prompt set too.
+        msg = await server._prompt_op("blue_gatorade", "a blue sports drink bottle", "save")
+        assert "Saved 1 prompt" in msg
+        assert detector.items[0].prompts == ("a blue sports drink bottle",)
+        assert server.items_catalog.item("blue_gatorade").prompts == \
+            ("a blue sports drink bottle",)
+
+        # Restoring removes the override: the item falls back to a generated prompt.
+        await server._prompt_op("blue_gatorade", "", "restore")
+        assert detector.items[0].prompts == ()
+        assert server.items_catalog.item("blue_gatorade") is None
+
+        # The prompt editor never offers the hand: it is a detector class, not an item.
+        assert all(entry["id"] != "hand" for entry in server._prompts_data())
+    finally:
         await server.stop()

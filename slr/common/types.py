@@ -38,8 +38,10 @@ class Detection:
     """One detected box. Coordinates are normalized to 0..1 of the frame.
 
     Fields:
-    - ``cls``: the class id the model assigned, e.g. ``"pasta"`` (a key in config/classes.yaml).
-    - ``conf``: the model's confidence, 0.0 (no idea) to 1.0 (certain).
+    - ``cls``: the class id the model assigned, e.g. ``"pasta"`` (a key in config/catalog.yaml).
+    - ``conf``: the model's confidence, 0.0 (no idea) to 1.0 (certain). The scale depends on
+      the source: CLIP product matches report a cosine similarity (roughly 0.20-0.40), while
+      EgoHands hand boxes report a probability. Guidance thresholds are set per source.
     - ``x1, y1``: top-left corner of the box as a fraction of frame width / height.
     - ``x2, y2``: bottom-right corner, same units.
 

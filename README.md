@@ -69,14 +69,42 @@ keeps it selected and restarts its search. Holding TOGGLE for `toggle_hold_s` ru
 The first run renders a few hundred speech clips in the background (about a minute). After that
 they are cached in `data/clips/`.
 
+## Shopping list and custom items
+
+The list editor at `http://<laptop>:8767/` accepts any product name, not only the presets:
+type "Coca Cola" and it becomes a list item with generated CLIP prompts. The **item prompts**
+page (`/prompts`) edits the sentences CLIP compares against the crop; specifics such as brand,
+colour and container improve detection. User items and their prompts live in
+`data/catalog_user.yaml` and survive updates; the presets stay in `config/catalog.yaml`.
+`slr list prompts "Coca Cola"` prints the active prompts, and `slr list classes` shows the
+presets plus your own items.
+
+The two catalog files share one format:
+
+```yaml
+items:
+  tomato_sauce:
+    spoken: tomato sauce          # what the voice says
+    prompts:                      # 2-4 short CLIP sentences, averaged
+      - "a can of tomato sauce"
+      - "a jar of tomato sauce"
+    aliases: [tomato sauce]       # other spellings accepted by `slr list add`
+    min_score: 0.32               # optional per-item floor (default: model.fast_item_min_score)
+```
+
+`hand` is the only entry with `non_item: true`. A user entry with the same id overrides the
+preset, which is what the prompt editor writes. Prompts are capped at 12 lines of 300
+characters. Identify, like Find, only names items on the list; with an empty list it says
+"Your shopping list is empty." rather than guessing.
+
 ## The model
 
 The server ships with the fast zero-shot grocery pipeline. It does not need training on the
 production camera or room:
 
 - **YOLO-World** (TensorRT) proposes generic product boxes.
-- **CLIP ViT-B/16** names each crop with one of the 26 grocery classes in
-  `config/classes.yaml` (`pasta`, `soda`, `cookies`, ...).
+- **CLIP ViT-B/16** names each crop with one of the items on the shopping list. The preset
+  menu (with its prompts) is `config/catalog.yaml` (`pasta`, `soda`, `cookies`, ...).
 - **EgoHands YOLO** supplies the shopper's hand boxes, which drive hand guidance.
 
 The two engines live in [`models/tensorrt/`](models/tensorrt/README.md). They are not committed
@@ -88,12 +116,19 @@ Face and cached.
 On the RTX 4070 laptop the S detector + EgoHands + FP16 CLIP runs around 30 FPS. Use
 `shelf_world.engine` (L) if product recall matters more than the last few FPS.
 
-`fast_clip_conf: 0.80` is conservative. Lower it (for example 0.5) if live recall is low; the
-guidance engine's `stable_k` / `stable_n` filter handles flicker. For dense shelves, raise
-`fast_detector_conf` from 0.01 to 0.1–0.25.
+`fast_item_min_score: 0.30` is the cosine floor for a match and `fast_item_margin: 0.02` is
+how far the winner must lead the runner-up when the list has two or more items. Both were
+calibrated on the GrocerEye validation split (see `reports/clip_item_calibration.md`); a
+close call is rejected rather than guessed. A one-item list has no runner-up, so it is the
+weakest mode: lower `fast_item_min_score` for more recall, raise it for fewer false "found"s.
+For dense shelves, raise `fast_detector_conf` from 0.01 to 0.1–0.25.
 
-Run `slr list classes` to see valid item names. Spoken names live in `config/classes.yaml`
-(`tomato_sauce: tomato sauce`).
+Run `slr list classes` to see the preset item names. Each preset's spoken name and CLIP
+prompts live in `config/catalog.yaml` (`tomato_sauce: {spoken: tomato sauce, ...}`). Items you
+add yourself are written to `data/catalog_user.yaml`.
+
+The list-only detection design, and the measured accuracy behind its thresholds, is in
+[`docs/clip-item-verification.md`](docs/clip-item-verification.md).
 
 The old trained YOLO weights and reports remain in `models/` as historical artifacts, but the
 server no longer loads them.
@@ -112,7 +147,7 @@ If the package is not installed, run the same commands from the repo root with
 | `slr device test-controls` | live readings of buttons, mode switch and volume dial (FR-76) |
 | `slr device test-camera` | open the camera and save one frame to `data/camera_test.jpg` |
 | `slr device calibrate-volume` | record dial min / middle / max (FR-44) |
-| `slr list show / add / remove / clear / reset / classes` | shopping list (FR-3, FR-6) |
+| `slr list show / add / remove / clear / reset / classes / prompts` | shopping list (FR-3, FR-6) and item prompts |
 | `slr bench` | latency, FPS and UDP loss; compares resolutions (FR-75) |
 | `slr bench --log data/logs/session_*.jsonl` | same numbers from a real session log |
 | `slr replay <video-or-folder> --script s.yaml` | cue timeline for a recording (FR-73) |
@@ -185,6 +220,12 @@ and set `camera.index` in `config/device.yaml`.
 
 ### Calibration
 
+- **Item detection (CLIP cosine):** if a product you can see is never found, lower
+  `model.fast_item_min_score` by 0.02; if the wrong product is named, raise it. If two items on
+  the list are confused, raise `model.fast_item_margin` (a close call is then rejected instead
+  of guessed). The debug view prints the raw score under each box. After changing the CLIP
+  backbone or a batch of prompts, re-run `training/calibrate_items.py` (see
+  `docs/clip-item-verification.md`).
 - **Volume dial:** `slr device calibrate-volume`, turn to min / middle / max when asked. Values are
   saved to `config/device.yaml`. `curve: log` fits a log curve instead of piecewise lines.
 - **Vertical zones (shelf height):** the zones depend on how the camera tilts on the chest. Run

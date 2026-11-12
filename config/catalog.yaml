@@ -1,0 +1,192 @@
+# The item catalog: what can go on the shopping list, and the CLIP prompts that find it.
+#
+# What this file is for
+#   YOLO-World proposes boxes around product-shaped things. CLIP then compares each crop
+#   with the prompts below and the detector keeps the item that matches best. Better prompts
+#   mean better detection: name the container, the colour and any distinctive feature. A
+#   prompt should describe what the camera sees, not what the nutrition label says.
+#
+# Who reads it
+#   The laptop server, the `slr list` commands and the web editor, via
+#   slr/common/catalog.py. config/server.yaml points here with `model.catalog_file`.
+#
+# What is hardcoded and what is not
+#   This file is a MENU of preset items, not the set of things the detector can ever name.
+#   At runtime the detector only scores the items that are actually on the shopping list.
+#   Type a new item on the web page or `slr list add "blue Gatorade"` and it is added to
+#   data/catalog_user.yaml with a generated prompt, without touching this file.
+#
+# How to edit safely
+#   Keep the two-space indentation. Each item can have:
+#     spoken:  what the voice says (defaults to the id with spaces)
+#     prompts: one or more sentences for CLIP (averaged; 2-4 short ones is plenty)
+#     aliases: other ways to type the item (optional)
+#     min_score: optional per-item cosine floor (defaults to model.fast_item_min_score)
+#     non_item: true for a detector class that is not a grocery item
+#   Items the user adds (and any prompt edit) live in data/catalog_user.yaml, not here.
+#   Lines starting with # are comments. Order matters only for dataset class indices:
+#   the GrocerEye labels use the order below, so add new items at the END.
+
+items:
+  beans:
+    spoken: beans
+    prompts:
+      - "a can of baked beans"
+      - "a tin can of beans"
+      - "a can with a beans label"
+  cake:
+    spoken: cake
+    prompts:
+      - "a packaged cake"
+      - "a cake in a box"
+      - "a boxed cake"
+  candy:
+    spoken: candy
+    prompts:
+      - "a bag of candy"
+      - "a packet of sweets"
+      - "a candy bar wrapper"
+  cereal:
+    spoken: cereal
+    prompts:
+      - "a cereal box"
+      - "a large box of breakfast cereal"
+      - "a colorful cereal carton"
+  chips:
+    spoken: chips
+    prompts:
+      - "a bag of potato chips"
+      - "a foil bag of crisps"
+      - "a snack chip bag"
+  chocolate:
+    spoken: chocolate
+    prompts:
+      - "a chocolate bar"
+      - "a wrapped chocolate bar"
+      - "a chocolate candy bar"
+  coffee:
+    spoken: coffee
+    prompts:
+      - "a bag of coffee"
+      - "a coffee package"
+      - "a can of ground coffee"
+  corn:
+    spoken: corn
+    prompts:
+      - "a can of corn"
+      - "a tin of sweetcorn"
+      - "a can with a corn label"
+  fish:
+    spoken: fish
+    prompts:
+      - "a can of tuna"
+      - "a tin of canned fish"
+      - "a flat can of fish"
+  flour:
+    spoken: flour
+    prompts:
+      - "a bag of flour"
+      - "a paper sack of flour"
+      - "a large flour package"
+  honey:
+    spoken: honey
+    prompts:
+      - "a jar of honey"
+      - "a glass jar of honey"
+      - "a plastic honey bottle"
+  jam:
+    spoken: jam
+    prompts:
+      - "a jar of jam"
+      - "a glass jar of fruit preserves"
+      - "a jam jar with a lid"
+  juice:
+    spoken: juice
+    prompts:
+      - "a bottle of juice"
+      - "a carton of fruit juice"
+      - "a plastic juice bottle"
+  milk:
+    spoken: milk
+    prompts:
+      - "a carton of milk"
+      - "a milk carton"
+      - "a plastic jug of milk"
+  nuts:
+    spoken: nuts
+    prompts:
+      - "a bag of nuts"
+      - "a package of peanuts"
+      - "a jar of mixed nuts"
+  oil:
+    spoken: oil
+    prompts:
+      - "a bottle of cooking oil"
+      - "a clear bottle of vegetable oil"
+      - "a large oil bottle"
+  pasta:
+    spoken: pasta
+    prompts:
+      - "a package of pasta"
+      - "a bag of dry pasta"
+      - "a box of spaghetti"
+  rice:
+    spoken: rice
+    prompts:
+      - "a bag of rice"
+      - "a large sack of white rice"
+      - "a rice package"
+  soda:
+    spoken: soda
+    prompts:
+      - "a can of soda"
+      - "a soda bottle"
+      - "a carbonated drink can"
+  spices:
+    spoken: spices
+    prompts:
+      - "a spice jar"
+      - "a small jar of spices"
+      - "a spice container"
+  sugar:
+    spoken: sugar
+    prompts:
+      - "a bag of sugar"
+      - "a paper bag of white sugar"
+      - "a sugar package"
+  tea:
+    spoken: tea
+    prompts:
+      - "a box of tea"
+      - "a tea box with tea bags"
+      - "a packet of tea"
+  tomato_sauce:
+    spoken: tomato sauce
+    prompts:
+      - "a can of tomato sauce"
+      - "a jar of tomato sauce"
+      - "a can of crushed tomatoes"
+  vinegar:
+    spoken: vinegar
+    prompts:
+      - "a bottle of vinegar"
+      - "a clear bottle of white vinegar"
+      - "a vinegar bottle"
+  water:
+    spoken: water
+    prompts:
+      - "a bottle of water"
+      - "a clear plastic water bottle"
+      - "a water bottle"
+  cookies:
+    spoken: cookies
+    prompts:
+      - "a package of cookies"
+      - "a box of cookies"
+      - "a bag of biscuits"
+  # Not a grocery item: the shopper's own hand, supplied by the EgoHands detector. It is kept
+  # here so every class the detector can report has a spoken name, but the shopping list never
+  # offers it (`guidance.non_item_classes: [hand]`).
+  hand:
+    spoken: hand
+    non_item: true

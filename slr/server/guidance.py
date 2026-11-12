@@ -75,7 +75,9 @@ WORDS YOU WILL SEE
 - Detection: one box found by the detector (see ``slr/common/types.py``). ``.cls`` is the class
   name (e.g. "pasta"), ``.conf`` is the detector's confidence 0..1, ``.cx/.cy`` the box center,
   ``.h`` the box height. All positions are fractions of the frame (0 = left/top, 1 = right/bottom).
-- confidence: how sure the detector is, from 0 (guess) to 1 (certain).
+- confidence: how sure the detector is, from 0 (guess) to 1 (certain). For CLIP product boxes
+  this is a cosine similarity, so a good match is around 0.30, not 0.90; hand boxes use the
+  EgoHands probability. The thresholds below are set per source.
 - IoU (intersection over union): how much two boxes overlap, 0 = none, 1 = identical.
 - hysteresis: a deliberate "stickiness" so a value hovering around a boundary does not flip
   back and forth. We only change our mind once it is clearly past the line.
@@ -753,6 +755,10 @@ def _on_control(s: State, ev: Control, now: float, cfg: GuidanceConfig) -> tuple
         # Holding TOGGLE (or the shutter) works even in OFF; it returns to the same mode.
         if s.mode == Mode.IDENTIFYING:
             return s, []
+        if not s.items:
+            # Identify only names items on the list (D2). With no list there is nothing to
+            # name, so say so instead of starting a burst that can only answer "Not sure."
+            return s, [say("list_empty", interrupt=True)]
         return _start_identify(s, now, cfg)
     if e == "mode_off":
         # Mode switch OFF: silent monitor. Keep the camera/inference running if configured,

@@ -29,7 +29,9 @@ network:
 # version; see models/tensorrt/README.md to copy or rebuild them.
 model:
   backend: fast_grocery   # fast_grocery | scripted
-  classes_file: config/classes.yaml   # id -> spoken name; matches the CLIP labels
+  # The item catalog: ids, spoken names and the CLIP prompts used to find each item.
+  # Add your own items on the shopping-list web page; they go to data/catalog_user.yaml.
+  catalog_file: config/catalog.yaml
   device: auto           # auto picks CUDA, then Apple MPS, then CPU (engines need CUDA)
 
   # YOLO-World product detector. shelf_world_s.engine is faster; shelf_world.engine has
@@ -40,9 +42,14 @@ model:
   fast_detector_iou: 0.5
   fast_max_det: 100
 
-  # CLIP names each product crop. FP16 on CUDA; lower fast_clip_conf for more recall.
+  # CLIP checks each crop against the items on the shopping list (no fixed label list).
+  # Scores are cosine similarities, not probabilities. Calibrated on the GrocerEye val split:
+  # reports/clip_item_calibration.md. 0.30 is the balanced 1-item threshold for ViT-B/16;
+  # with 2+ items on the list, fast_item_margin decides close calls.
   fast_clip_model: openai/clip-vit-base-patch16
-  fast_clip_conf: 0.80
+  fast_item_min_score: 0.30
+  fast_item_margin: 0.02
+  fast_prompt_from_box: true   # also try "a can of X" using YOLO's own box label
   fast_clip_half: true
   fast_clip_batch: 16
 
@@ -61,12 +68,14 @@ model:
 
 # The guidance engine: how detections become spoken directions (slr/server/guidance.py).
 guidance:
-  # Confidence thresholds. conf_find is rewritten by training/pick_threshold.py (TR-14).
-  # For the fast backend, confidence is the final CLIP label confidence (and the EgoHands
-  # confidence for hand boxes). A detection below the threshold is ignored.
-  conf_find: 0.5
-  conf_identify: 0.75   # final CLIP confidence; tune on the demo items (see DECISIONS.md)
-  conf_wrong_item: 0.7
+  # Confidence thresholds. For the fast backend, product confidence is a CLIP cosine
+  # similarity (roughly 0.20-0.40), not a probability; hand confidence is still an EgoHands
+  # probability (hand_conf, below). Calibrated on the GrocerEye val split, see
+  # reports/clip_item_calibration.md. conf_find matches the detector's min_score so it does
+  # not throw away boxes the detector already accepted.
+  conf_find: 0.30
+  conf_identify: 0.33   # Identify is slightly stricter: naming the wrong thing is worse
+  conf_wrong_item: 0.33
 
   # Stable detection (PRD 8.2): target in >= stable_k of the last stable_n processed frames
   # This filters out one-frame false alarms before "found" is spoken.
@@ -174,6 +183,7 @@ tts:
 # Where the server keeps its files (relative to the repo folder).
 paths:
   shopping_list: data/shopping_list.yaml   # the live shopping list
+  user_catalog: data/catalog_user.yaml     # items the user added (with their prompts)
   clips_dir: data/clips                    # rendered speech clips (cache)
   logs_dir: data/logs                      # one JSONL session log per run (FR-72)
   captured_dir: data/captured              # frames saved with the "f" key for training

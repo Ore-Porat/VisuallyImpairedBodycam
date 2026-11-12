@@ -6,6 +6,11 @@ The shopper's list lives in a small text file (``data/shopping_list.yaml``). Thi
 lets other code add / remove / reset items, and writes it back safely. Every item has a name
 (a model "class id" like ``tomato_sauce``) and a status: pending (still to find) or found.
 
+Item names are not limited to the presets. With a ``Catalog`` (the normal server setup), a name
+the catalog does not know is created as a user item with a generated prompt; ``data/catalog_user.yaml``
+keeps it for next time. The old strict mode (a plain id -> spoken dict) is still supported for
+tests and old callers.
+
 HOW IT FITS IN
 --------------
 Three things edit the list: the command line (``slr list add pasta``), the browser page from
@@ -31,6 +36,7 @@ from pathlib import Path
 
 import yaml
 
+from slr.common.catalog import Catalog
 from slr.common.types import FOUND, PENDING, ListItem
 
 
@@ -40,13 +46,20 @@ class ListError(ValueError):
     pass
 
 
-def normalize_name(name: str, known: dict[str, str]) -> str:
+def normalize_name(name: str, known: dict[str, str] | Catalog) -> str:
     """Accept a class id or its spoken name, case-insensitively; return the class id.
 
     name:  what the user typed, e.g. "Tomato Sauce", "tomato_sauce" or "tomato sauce".
-    known: dict of class id -> spoken name for everything the model can detect.
-    Raises ListError if nothing matches.
+    known: dict of class id -> spoken name, or a Catalog. A Catalog also understands aliases.
+    Raises ListError if nothing matches. (``ShoppingList.add`` creates new user items when a
+    Catalog is supplied; this function is the strict lookup used by remove.)
     """
+    # A Catalog knows ids, spoken names and aliases.
+    if isinstance(known, Catalog):
+        item = known.resolve(name)
+        if item is None:
+            raise ListError(f"'{name}' is not an item in the catalog")
+        return item.id
     # Collapse extra spaces and lower-case so "Tomato   Sauce" matches "tomato sauce".
     raw = " ".join(name.split()).lower()
     for cls, spoken in known.items():
@@ -60,18 +73,26 @@ def normalize_name(name: str, known: dict[str, str]) -> str:
 class ShoppingList:
     """The list in memory plus load/save to its YAML file. Keeps ``current`` (the active index)."""
 
-    def __init__(self, path: Path, known_classes: dict[str, str]):
+    def __init__(self, path: Path, known_classes: dict[str, str] | Catalog):
         """Load the list from ``path`` (a missing file just means an empty list).
 
-        known_classes: class id -> spoken name, used to validate item names.
+        known_classes: class id -> spoken name, or a Catalog. With a Catalog, a name that is
+        not known yet is created as a user item (free text) instead of being rejected.
         """
         self.path = Path(path)
-        self.known = known_classes
+        self.catalog = known_classes if isinstance(known_classes, Catalog) else None
+        self.known = (known_classes.item_map() if self.catalog is not None
+                      else dict(known_classes))
         self.items: list[ListItem] = []
         self.current = 0
         # Modification time of the file when we last read or wrote it (see changed_on_disk).
         self._mtime: float | None = None
         self.load()
+
+    def refresh_known(self) -> None:
+        """Refresh the id -> spoken name map after the catalog gained an item."""
+        if self.catalog is not None:
+            self.known = self.catalog.item_map()
 
     # ----------------------------------------------------------------- persistence
 
@@ -129,19 +150,31 @@ class ShoppingList:
     # ----------------------------------------------------------------- edits
 
     def add(self, name: str) -> str:
-        """Append an item (by id or spoken name) and save. Returns the class id."""
-        cls = normalize_name(name, self.known)
+        """Append an item (by id or spoken name) and save. Returns the class id.
+
+        With a Catalog, a name that is not known is created as a user item with generated
+        prompts. This is how free text becomes a real, persistent item.
+        """
+        if self.catalog is not None:
+            cls = self.catalog.resolve_or_create(name).id
+            self.refresh_known()
+        else:
+            cls = normalize_name(name, self.known)
         self.items.append(ListItem(cls))
         self.save()
         return cls
 
     def remove(self, name: str) -> str:
         """Remove the first item with this name and save. Returns the class id."""
-        try:
-            cls = normalize_name(name, self.known)
-        except ListError:
-            # Not a known class; still allow removing it by its raw name (e.g. a stale entry).
-            cls = name
+        if self.catalog is not None:
+            item = self.catalog.resolve(name)
+            cls = item.id if item is not None else name
+        else:
+            try:
+                cls = normalize_name(name, self.known)
+            except ListError:
+                # Not a known class; still allow removing it by its raw name (e.g. a stale entry).
+                cls = name
         for i, it in enumerate(self.items):
             if it.name == cls:
                 del self.items[i]
@@ -173,9 +206,20 @@ class ShoppingList:
         self._clamp()
         self.save()
 
-    def unknown_items(self) -> list[str]:
-        """Names on the list that the loaded model cannot detect (so we can warn about them)."""
-        return [it.name for it in self.items if it.name not in self.known]
+    def uncurated_items(self) -> list[str]:
+        """List items that use a generated prompt (no hand-written prompts in the catalog).
+
+        They still work: the detector builds "a photo of X" and, for a box label, "a can of
+        X". Accuracy is lower, so the UI marks them and the server logs them at startup.
+        """
+        if self.catalog is None:
+            return []
+        out: list[str] = []
+        for listed in self.items:
+            item = self.catalog.item(listed.name)
+            if item is None or not item.prompts:
+                out.append(listed.name)
+        return out
 
     def describe(self) -> str:
         """A multi-line text view of the list for ``slr list show``.

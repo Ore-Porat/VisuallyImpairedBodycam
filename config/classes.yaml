@@ -11,9 +11,10 @@
 #   anything that sounds natural ("tomato sauce", "pasta sauce", ...).
 #
 # Who reads it
-#   The laptop server (slr/server) loads it at startup; config/server.yaml points at it with
-#   the `classes_file` setting. `slr list classes` prints the ids. FR-62 is a requirement
-#   number from the product spec, PRD.pdf.
+#   This file is a historical/legacy fixture. The shipped server reads config/catalog.yaml
+#   (via the `catalog_file` setting), which has the same ids plus the CLIP prompts. This file
+#   is kept because the loader still understands the old `classes:` shape and tests use it.
+#   FR-62 is a requirement number from the product spec, PRD.pdf.
 #
 # How to edit safely
 #   Keep the two-space indentation and the "id: name" shape. Do not rename ids unless the

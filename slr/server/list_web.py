@@ -14,8 +14,10 @@ A tiny web server built from Python's standard library. It answers two kinds of 
    the device downloads the speech clips the laptop rendered (see ``clips.py``).
 2. From a person's browser (a helper, family member or the shopper with a screen reader):
    the shopping list page at ``http://<laptop>:8767/``. It shows the list and has buttons to
-   add, remove, re-order and reset items. Every button is an ordinary HTML form, so the page
-   needs no JavaScript and works with keyboard and screen readers.
+   add, remove, re-order and reset items. Any product name can be typed, not only the
+   presets. A second page at ``/prompts`` edits the CLIP sentences for each item, which is
+   how a user makes an unfamiliar product detectable. Every control is an ordinary HTML
+   form, so the pages need no JavaScript and work with keyboard and screen readers.
 
 HOW IT FITS IN
 --------------
@@ -78,19 +80,26 @@ def list_version(items, current: int) -> str:
     return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:12]
 
 
-def render_items(items, current: int, known: dict[str, str]) -> str:
-    """The numbered item list, with stable hooks the browser script can update in place."""
+def render_items(items, current: int, known: dict[str, str], uncurated=()) -> str:
+    """The numbered item list, with stable hooks the browser script can update in place.
+
+    uncurated: item ids that use a generated prompt. The page marks them so the helper knows
+    the detection will be weaker until the prompts are edited.
+    """
     esc = html.escape
+    uncurated = set(uncurated)
     rows = []
     # One <li> per item, each with a "Remove" form and a "Make current" form.
     for i, it in enumerate(items):
         spoken = esc(known.get(it.name, it.name))
         status = "found" if it.status == FOUND else "not found yet"
         cur = " (current item)" if i == current else ""
+        hint = ('<span class="hint"> (generated prompts)</span>'
+                if it.name in uncurated else "")
         rows.append(
             f'<li data-name="{esc(it.name)}"><span class="info">{i + 1}. {spoken}: '
             f'<span class="state">{status}</span>'
-            f'<span class="current">{cur}</span></span> '
+            f'<span class="current">{cur}</span>{hint}</span> '
             f'<form method="post" action="/list/remove" class="inline">'
             f'<input type="hidden" name="item" value="{esc(it.name)}">'
             f'<button type="submit">Remove {spoken}</button></form> '
@@ -101,7 +110,7 @@ def render_items(items, current: int, known: dict[str, str]) -> str:
     return "<ol>" + "".join(rows) + "</ol>" if rows else "<p>The list is empty.</p>"
 
 
-def state_payload(items, current: int, known: dict[str, str]) -> dict:
+def state_payload(items, current: int, known: dict[str, str], uncurated=()) -> dict:
     """JSON for the polling browser: a version, the status fields, and fresh list HTML."""
     return {
         "version": list_version(items, current),
@@ -109,7 +118,7 @@ def state_payload(items, current: int, known: dict[str, str]) -> dict:
             {"name": it.name, "found": it.status == FOUND, "current": i == current}
             for i, it in enumerate(items)
         ],
-        "html": render_items(items, current, known),
+        "html": render_items(items, current, known, uncurated),
     }
 
 
@@ -166,20 +175,23 @@ LIVE_UPDATE_SCRIPT = """
 """
 
 
-def render_page(items, current: int, known: dict[str, str], message: str = "") -> str:
+def render_page(items, current: int, known: dict[str, str], message: str = "",
+                uncurated=()) -> str:
     """Build the HTML for the shopping list page as one big string.
 
-    items:   the list entries (name + status).
-    current: index of the current item (gets the "(current item)" tag).
-    known:   class id -> spoken name, used both for display and for the "add" drop-down.
-    message: optional confirmation text shown in the status live region.
+    items:     the list entries (name + status).
+    current:   index of the current item (gets the "(current item)" tag).
+    known:     class id -> spoken name, used both for display and for the add suggestions.
+    message:   optional confirmation text shown in the status live region.
+    uncurated: item ids whose prompts are generated (marked in the list).
     """
     esc = html.escape
     version = list_version(items, current)
-    items_html = render_items(items, current, known)
-    # The drop-down of every item the model knows, sorted by spoken name.
-    options = "".join(f'<option value="{esc(k)}">{esc(v)}</option>'
-                      for k, v in sorted(known.items(), key=lambda kv: kv[1]))
+    items_html = render_items(items, current, known, uncurated)
+    # Suggestions for the add box. It is a <datalist>, not a <select>, so any product name can
+    # be typed; picking a suggestion is just a shortcut.
+    options = "".join(f'<option value="{esc(v)}"></option>'
+                      for _, v in sorted(known.items(), key=lambda kv: kv[1]))
     # The status paragraph is always present (even empty) so screen readers can watch it.
     status = f'<p role="status" id="status">{esc(message)}</p>' if message else \
         '<p role="status" id="status"></p>'
@@ -198,7 +210,9 @@ def render_page(items, current: int, known: dict[str, str], message: str = "") -
   /* Large, high-contrast text; narrow column that is easy to read. */
   body {{ font-family: system-ui, sans-serif; font-size: 1.25rem; line-height: 1.5;
          max-width: 40rem; margin: 1rem auto; padding: 0 1rem; color: #111; background: #fff; }}
-  button, select {{ font-size: 1.1rem; padding: .4rem .8rem; margin: .2rem 0; }}
+  button, input, select, textarea {{ font-size: 1.1rem; padding: .4rem .8rem; margin: .2rem 0; }}
+  textarea {{ width: 100%; box-sizing: border-box; font-family: inherit; }}
+  .hint {{ font-size: 1rem; color: #444; }}
   /* A thick visible focus ring so keyboard users can see where they are. */
   :focus {{ outline: 3px solid #1a5fb4; outline-offset: 2px; }}
   .inline {{ display: inline; }}
@@ -215,12 +229,17 @@ def render_page(items, current: int, known: dict[str, str], message: str = "") -
 <!-- The numbered list of items, each with Remove / Make current buttons. The script
      updates this box in place when the device or another client changes something. -->
 <div id="items" data-version="{version}">{items_html}</div>
+<p class="hint">Detection quality comes from the prompts. <a href="/prompts">Edit item prompts</a>.</p>
 <h2>Add an item</h2>
-<!-- Submitting this form sends a POST to /list/add with the chosen class id. -->
+<!-- Free text with preset suggestions. A new name becomes a catalog item with generated
+     prompts, which can then be edited on the prompts page. -->
 <form method="post" action="/list/add">
   <label for="item">Item to add</label>
-  <select id="item" name="item">{options}</select>
+  <input id="item" name="item" list="item-names" autocomplete="off" required>
+  <datalist id="item-names">{options}</datalist>
   <button type="submit">Add item</button>
+  <p class="hint">Pick a preset or type any product name. New items use generated prompts;
+  edit them on the <a href="/prompts">item prompts page</a> for better accuracy.</p>
 </form>
 <h2>Whole list</h2>
 <form method="post" action="/list/reset" class="inline">
@@ -236,17 +255,135 @@ def render_page(items, current: int, known: dict[str, str], message: str = "") -
 """
 
 
+def _badges(entry: dict) -> str:
+    """Short human-readable labels for one prompt-editor row."""
+    labels = ["on your list"] if entry["on_list"] else []
+    labels.append("preset" if entry["preset"] else "custom item")
+    if entry.get("override"):
+        labels.append("your prompts")
+    if entry.get("generated"):
+        labels.append("generated prompts")
+    return ", ".join(labels)
+
+
+# Shared styles for the two prompt pages. Kept plain and high-contrast, like the list page.
+_PROMPTS_STYLE = """
+  body { font-family: system-ui, sans-serif; font-size: 1.25rem; line-height: 1.5;
+         max-width: 40rem; margin: 1rem auto; padding: 0 1rem; color: #111; background: #fff; }
+  button, input, textarea { font-size: 1.1rem; padding: .4rem .8rem; margin: .2rem 0; }
+  textarea { width: 100%; box-sizing: border-box; font-family: inherit; }
+  :focus { outline: 3px solid #1a5fb4; outline-offset: 2px; }
+  .inline { display: inline; }
+  li { margin-bottom: .6rem; }
+  .hint { font-size: 1rem; color: #444; }
+  #status { font-weight: bold; }
+"""
+
+
+def render_prompts_page(entries: list[dict], message: str = "") -> str:
+    """Index of every item whose CLIP prompts can be edited."""
+    esc = html.escape
+    status = f'<p role="status" id="status">{esc(message)}</p>' if message else \
+        '<p role="status" id="status"></p>'
+    rows = []
+    # Items on the shopping list come first: those are the ones that matter right now.
+    for entry in sorted(entries, key=lambda e: (not e["on_list"], e["spoken"].lower())):
+        rows.append(
+            f'<li><a href="/prompts/edit?item={quote(entry["id"])}">'
+            f'Edit prompts for {esc(entry["spoken"])}</a> '
+            f'<span class="hint">({esc(_badges(entry))})</span></li>'
+        )
+    listing = "<ol>" + "".join(rows) + "</ol>" if rows else "<p>No items yet.</p>"
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SLR SLR item prompts</title>
+<style>{_PROMPTS_STYLE}</style>
+</head>
+<body>
+<main>
+<h1>Item prompts</h1>
+{status}
+<p>CLIP finds an item by comparing the camera picture with these sentences. More specific
+prompts (brand, colour, container) give better detection. Items marked
+<strong>generated prompts</strong> still work, but using your own words usually helps.</p>
+{listing}
+<p><a href="/">Back to the shopping list</a></p>
+</main>
+</body>
+</html>
+"""
+
+
+def render_prompt_edit(entry: dict, message: str = "") -> str:
+    """Edit page for one item: one prompt per line, plus restore/remove."""
+    esc = html.escape
+    status = f'<p role="status" id="status">{esc(message)}</p>' if message else \
+        '<p role="status" id="status"></p>'
+    text = esc("\n".join(entry["prompts"]))
+    generated = ('<p class="hint">These are generated prompts. Replacing them with '
+                 'descriptions of the actual product usually improves detection.</p>'
+                 if entry.get("generated") else "")
+    # A preset only needs a restore button when the user has overridden it; a custom item
+    # always gets one, because removing its prompts falls back to the generated sentence.
+    restore = entry.get("override") or entry.get("user_only")
+    restore_label = ("Restore the preset prompts" if entry["preset"]
+                     else "Use generated prompts instead")
+    restore_form = ""
+    if restore:
+        restore_form = f"""
+<form method="post" action="/prompts" class="inline">
+  <input type="hidden" name="item" value="{esc(entry["id"])}">
+  <button type="submit" name="action" value="restore">{restore_label}</button>
+</form>"""
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SLR SLR prompts for {esc(entry["spoken"])}</title>
+<style>{_PROMPTS_STYLE}</style>
+</head>
+<body>
+<main>
+<h1>Prompts for {esc(entry["spoken"])}</h1>
+{status}
+<p class="hint">{esc(_badges(entry))}.</p>
+{generated}
+<form method="post" action="/prompts">
+  <input type="hidden" name="item" value="{esc(entry["id"])}">
+  <label for="prompts">Prompts for {esc(entry["spoken"])}, one per line</label>
+  <textarea id="prompts" name="prompts" rows="8" spellcheck="true">{text}</textarea>
+  <p class="hint">Describe what the camera sees. For example: "a red can of Coca-Cola",
+  "a can of Coca-Cola", "a Coca-Cola can". Several short sentences work better than one
+  long one. Up to 12 prompts.</p>
+  <button type="submit" name="action" value="save">Save prompts</button>
+</form>
+{restore_form}
+<p><a href="/prompts">Back to all item prompts</a></p>
+</main>
+</body>
+</html>
+"""
+
+
 def make_handler(get_page_data: Callable[[], tuple], list_op: ListOp,
-                 manifest: Callable[[], dict[str, str]], clip_path: Callable[[str], object]):
+                 manifest: Callable[[], dict[str, str]], clip_path: Callable[[str], object],
+                 prompts_data: Callable[[], list[dict]] | None = None,
+                 prompt_op: Callable[[str, str, str], str] | None = None):
     """Build the request handler class, closing over the callbacks supplied by main.py.
 
-    get_page_data: returns (items, current, known) for the page.
-    list_op:       applies an edit: list_op("add", "pasta") -> confirmation message.
+    get_page_data: returns (items, current, known) or the same plus a set of uncurated ids.
+    list_op:       applies a list edit: list_op("add", "pasta") -> confirmation message.
     manifest:      returns the clip manifest dict (name -> sha256).
     clip_path:     returns the Path of a clip by name.
+    prompts_data:  returns the prompt-editor entries (optional; enables /prompts).
+    prompt_op:     saves or restores prompts (optional; enables POST /prompts).
 
     Python's HTTP server wants a CLASS, not an object, so we define the class inside this
-    function; the inner class can see the four callbacks above.
+    function; the inner class can see the callbacks above.
     """
     class Handler(BaseHTTPRequestHandler):
         """Handles one HTTP request. Python creates a new instance per request."""
@@ -267,15 +404,23 @@ def make_handler(get_page_data: Callable[[], tuple], list_op: ListOp,
             self.end_headers()
             self.wfile.write(body)
 
+        def _page(self):
+            """get_page_data() may return 3 values (old callers) or 4 (with uncurated ids)."""
+            data = get_page_data()
+            items, current, known = data[0], data[1], data[2]
+            uncurated = data[3] if len(data) > 3 else ()
+            return items, current, known, uncurated
+
         def do_GET(self):
-            """Answer a GET: the manifest, a clip file, or the list page."""
+            """Answer a GET: the manifest, a clip file, the list page or the prompt editor."""
             url = urlparse(self.path)
             if url.path == "/clips/manifest.json":
                 self._send(200, json.dumps(manifest()).encode(), "application/json")
                 return
             if url.path == "/list/state.json":
-                items, current, known = get_page_data()
-                self._send(200, json.dumps(state_payload(items, current, known)).encode(),
+                items, current, known, uncurated = self._page()
+                self._send(200, json.dumps(state_payload(items, current, known,
+                                                         uncurated)).encode(),
                            "application/json")
                 return
             if url.path.startswith("/clips/") and url.path.endswith(".wav"):
@@ -291,20 +436,52 @@ def make_handler(get_page_data: Callable[[], tuple], list_op: ListOp,
             if url.path in ("/", "/list"):
                 # ``?msg=...`` carries the confirmation text after a redirect (see do_POST).
                 msg = parse_qs(url.query).get("msg", [""])[0]
-                items, current, known = get_page_data()
-                self._send(200, render_page(items, current, known, msg).encode(), "text/html; charset=utf-8")
+                items, current, known, uncurated = self._page()
+                self._send(200, render_page(items, current, known, msg, uncurated).encode(),
+                           "text/html; charset=utf-8")
+                return
+            if url.path in ("/prompts", "/prompts/edit") and prompts_data is not None:
+                msg = parse_qs(url.query).get("msg", [""])[0]
+                entries = prompts_data()
+                if url.path == "/prompts":
+                    self._send(200, render_prompts_page(entries, msg).encode(),
+                               "text/html; charset=utf-8")
+                    return
+                item_id = parse_qs(url.query).get("item", [""])[0]
+                entry = next((e for e in entries if e["id"] == item_id), None)
+                if entry is None:
+                    self._send(404, b"no such item", "text/plain")
+                    return
+                self._send(200, render_prompt_edit(entry, msg).encode(),
+                           "text/html; charset=utf-8")
                 return
             self._send(404, b"not found", "text/plain")
 
         def do_POST(self):
             """Answer a form submission: apply the edit, then redirect back to the page."""
             url = urlparse(self.path)
-            if not url.path.startswith("/list/"):
+            if not (url.path.startswith("/list/") or url.path == "/prompts"):
                 self._send(404, b"not found", "text/plain")
                 return
             # Read the form body ("item=pasta" style) and parse it into a dict of lists.
             length = int(self.headers.get("Content-Length") or 0)
             form = parse_qs(self.rfile.read(length).decode("utf-8", "replace"))
+            if url.path == "/prompts":
+                if prompt_op is None:
+                    self._send(404, b"not found", "text/plain")
+                    return
+                item_id = (form.get("item") or [""])[0]
+                text = (form.get("prompts") or [""])[0]
+                action = (form.get("action") or ["save"])[0]
+                try:
+                    msg = prompt_op(item_id, text, action)
+                except Exception as e:  # CatalogError and friends: show the message
+                    msg = str(e)
+                self.send_response(303)
+                self.send_header("Location", f"/prompts/edit?item={quote(item_id)}"
+                                            f"&msg={quote(msg)}")
+                self.end_headers()
+                return
             # The operation is the last part of the path: /list/add -> "add".
             op = url.path[len("/list/"):]
             arg = (form.get("item") or form.get("index") or [""])[0]

@@ -199,7 +199,7 @@ def test_vertical_offset_shifts_zones():
 
 def test_select_target_ignores_low_confidence_and_other_classes():
     """Only boxes of the wanted class with confidence >= conf_find count as the target."""
-    dets = (det("rice", 0.99), det("pasta", 0.3))
+    dets = (det("rice", 0.99), det("pasta", 0.25))
     assert g.select_target(dets, "pasta", None, CFG) is None
 
 
@@ -330,9 +330,9 @@ def test_single_frame_false_positive_is_filtered():
 
 
 def test_low_confidence_target_never_found():
-    """Detections just under conf_find (0.5) never count, however many there are."""
+    """Detections just under conf_find (0.30) never count, however many there are."""
     d = searching_driver()
-    d.frames(10, det(conf=0.49))
+    d.frames(10, det(conf=0.25))
     assert d.s.mode == Mode.SEARCHING
 
 
@@ -503,7 +503,7 @@ def test_wrong_item_ignores_off_center_or_low_confidence():
     """Other items at the edge of view, or seen with low confidence, are not mentioned."""
     d = searching_driver()
     d.frames(5, det("rice", 0.9, cx=0.85))
-    d.frames(5, det("rice", 0.6))
+    d.frames(5, det("rice", 0.31))     # below conf_wrong_item 0.33
     assert "wrong_item" not in keys(d.log)
 
 
@@ -555,12 +555,12 @@ def test_identify_not_on_list_when_already_found():
 
 
 def test_identify_not_sure_when_votes_low_confidence():
-    """Five consistent but low-confidence votes (0.5 < conf_identify) give "Not sure.\""""
+    """Five consistent but low-confidence votes (0.30 < conf_identify) give "Not sure.\""""
     d = Driver()
     d.control("identify")
     b = d.s.identify.burst_id
     for _ in range(5):
-        fx = d.send(frame(det("rice", 0.5), purpose="identify", burst_id=b), 0.1)
+        fx = d.send(frame(det("rice", 0.30), purpose="identify", burst_id=b), 0.1)
     assert keys(fx) == ["not_sure"]
 
 
@@ -1302,3 +1302,21 @@ def test_camera_motion_does_not_block_a_grab():
     assert "hand_on_item" in keys(fx)
     assert d.s.items[0].status == FOUND
 
+
+
+def test_identify_with_an_empty_list_says_the_list_is_empty():
+    """Identify only names list items, so an empty list gets a phrase, not a burst."""
+    d = Driver(state=replace(g.initial_state(()), mode=Mode.IDLE))
+    fx = d.control("identify")
+    assert keys(fx) == ["list_empty"]
+    assert d.s.mode == Mode.IDLE
+    assert d.s.identify is None
+    assert not [e for e in fx if isinstance(e, Stream)]
+
+
+def test_identify_with_an_empty_list_works_in_standby_too():
+    """The TOGGLE hold works with the switch OFF; the empty-list answer must too."""
+    d = Driver(state=replace(g.initial_state(()), mode=Mode.STANDBY))
+    fx = d.control("identify")
+    assert keys(fx) == ["list_empty"]
+    assert d.s.mode == Mode.STANDBY

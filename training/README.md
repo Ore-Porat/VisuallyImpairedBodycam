@@ -160,6 +160,26 @@ has precision >= 0.90. `--write` stores that value as `guidance.conf_find` in
 `config/server.yaml`. Only that one line changes and comments are kept. Use a held-out split the
 model never trained on. A split you also used for early stopping is optimistic.
 
+## Calibrating the CLIP item thresholds
+
+The zero-shot pipeline (YOLO-World + CLIP) does not have a confidence head to sweep. Its
+decision is a cosine similarity, so it has its own calibration script:
+
+```
+python training/calibrate_items.py --data data/remapped/grocereye --split val \
+    --out reports/clip_item_calibration.md
+```
+
+It measures three cases separately: one item on the list (absolute threshold), two items
+(head-to-head accuracy and the margin between them), and all items competing (reference
+only). The report proposes `model.fast_item_min_score` and `fast_item_margin`.
+
+For a brand pair such as Coke vs Sprite, collect 10-20 bodycam photos per item into
+`data/brand_test/coke/` and `data/brand_test/sprite/`, then run the same script with
+`--images data/brand_test`. That is the only way to know whether the prompts actually
+separate the two products. The design and the measured results live in
+`docs/clip-item-verification.md`.
+
 ## Using the weights (TR-15)
 
 `train.py` copies `best.pt` to `models/<name>/` for evaluation and experiments. The shipped

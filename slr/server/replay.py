@@ -41,7 +41,7 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
-from slr.common.config import ServerConfig, load_classes, read_yaml
+from slr.common.config import ServerConfig, load_catalog, read_yaml
 from slr.server import guidance as g
 from slr.server.clips import PhraseCatalog
 from slr.server.core import ServerCore
@@ -59,7 +59,8 @@ def run_replay(cfg: ServerConfig, source: str | Path, script: dict, detector, ca
     camera:   optional frame source; by default a ``FileCamera`` reading ``source``.
     Returns a list of dicts like {"t": 1.2, "type": "cue", "key": "found", "text": "..."}.
     """
-    classes = load_classes(cfg.path(cfg.model.classes_file))
+    classes = load_catalog(cfg.path(cfg.model.catalog_file),
+                           cfg.path(cfg.paths.user_catalog)).spoken_map()
     catalog = PhraseCatalog.load(cfg.root / "config" / "phrases.yaml", classes)
     fps = float(script.get("fps", 10))
     # Sort the scripted button presses by time so we can walk through them in order.

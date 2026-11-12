@@ -52,6 +52,12 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 
+from slr.common.catalog import (
+    Catalog,
+    CatalogError,
+    load_catalog as _load_catalog,
+)
+
 
 class ConfigError(Exception):
     """Raised for any problem with a config file: missing, bad YAML, wrong value, etc.
@@ -108,14 +114,14 @@ class ModelConfig(_Model):
     """``model:`` block of server.yaml: the fast zero-shot grocery detector.
 
     The shipped model has no trained grocery classifier. YOLO-World proposes
-    generic product boxes, CLIP names each crop with one of the 26 grocery
-    classes, and EgoHands supplies the shopper's hand. The engines are TensorRT
-    files built for the target GPU (see ``models/tensorrt/README.md``).
+    generic product boxes, CLIP checks each crop against the items on the shopping
+    list, and EgoHands supplies the shopper's hand. The engines are TensorRT files
+    built for the target GPU (see ``models/tensorrt/README.md``).
     """
     # fast_grocery is the real detector; scripted replays a JSON file for tests/replay.
     backend: Literal["fast_grocery", "scripted"] = "fast_grocery"
-    # YAML file mapping class ids to spoken names. Must match the CLIP prompts.
-    classes_file: str = "config/classes.yaml"
+    # The item catalog: ids, spoken names and CLIP prompts (see slr/common/catalog.py).
+    catalog_file: str = "config/catalog.yaml"
     # "auto" picks the GPU if one is available, else the CPU. TensorRT needs CUDA.
     device: str = "auto"
 
@@ -126,9 +132,18 @@ class ModelConfig(_Model):
     fast_detector_iou: float = 0.5
     fast_max_det: int = 100
 
-    # CLIP classifier for the crop labels.
+    # CLIP verification of each crop against the current shopping list.
     fast_clip_model: str = "openai/clip-vit-base-patch16"
-    fast_clip_conf: float = 0.80
+    # Absolute cosine similarity that counts as a match. Calibrated on GrocerEye val; see
+    # reports/clip_item_calibration.md. A single global value is a compromise: one-item
+    # lists are the weak case, so a catalog entry may override it with its own `min_score`.
+    fast_item_min_score: float = 0.30
+    # With 2+ items on the list, the winner must lead the runner-up by this much. A close
+    # call is rejected (say nothing) instead of naming the wrong product.
+    fast_item_margin: float = 0.02
+    # Also compare a box with "a can of X" / "a bottle of X" built from YOLO's own label.
+    # This is what makes free-text items usable without hand-written prompts.
+    fast_prompt_from_box: bool = True
     fast_clip_half: bool = True
     fast_clip_batch: int = 16
 
@@ -150,17 +165,19 @@ class ModelConfig(_Model):
         """Reject impossible fast-model settings with a clear startup error."""
         if not self.fast_detector_engine:
             raise ValueError("fast_detector_engine cannot be empty")
-        if not self.classes_file:
-            raise ValueError("classes_file cannot be empty")
+        if not self.catalog_file:
+            raise ValueError("catalog_file cannot be empty")
         if not self.fast_clip_model:
             raise ValueError("fast_clip_model cannot be empty")
         if self.fast_hand_engine is not None and not self.fast_hand_engine:
             raise ValueError("fast_hand_engine must be a path or null")
         if not 0 <= self.fast_detector_conf <= 1:
             raise ValueError("fast_detector_conf must be in [0, 1]")
-        for name in ("fast_clip_conf", "fast_hand_conf", "fast_detector_iou", "fast_nms_iou"):
+        for name in ("fast_item_min_score", "fast_hand_conf", "fast_detector_iou", "fast_nms_iou"):
             if not 0 < getattr(self, name) <= 1:
                 raise ValueError(f"{name} must be in (0, 1]")
+        if not 0 <= self.fast_item_margin <= 1:
+            raise ValueError("fast_item_margin must be in [0, 1]")
         for name in ("fast_detector_imgsz", "fast_hand_imgsz", "fast_max_det",
                      "fast_max_hands", "fast_clip_batch", "fast_min_box"):
             if getattr(self, name) < 1:
@@ -183,9 +200,14 @@ class GuidanceConfig(_Model):
     """
     # Minimum confidence to accept a detection in Find mode, Identify mode, and for the
     # "that is not the item you are looking for" warning.
-    conf_find: float = 0.5
-    conf_identify: float = 0.6
-    conf_wrong_item: float = 0.7
+    #
+    # For products, ``Detection.conf`` is now a raw CLIP cosine similarity (roughly
+    # 0.20-0.40), not a softmax probability, so these are cosine values. They were
+    # calibrated on the GrocerEye validation split; see reports/clip_item_calibration.md.
+    # ``hand_conf`` is separate and still a probability from EgoHands.
+    conf_find: float = 0.30
+    conf_identify: float = 0.33
+    conf_wrong_item: float = 0.33
 
     # An item counts as "seen" only if it appears in at least stable_k of the last stable_n
     # frames; this stops single-frame flickers from triggering speech.
@@ -367,6 +389,8 @@ class TTSConfig(_Model):
 class ServerPaths(_Model):
     """``paths:`` block of server.yaml: folders the server reads and writes (relative to repo)."""
     shopping_list: str = "data/shopping_list.yaml"
+    # Items the user added, with their prompts. Never overwritten by an update.
+    user_catalog: str = "data/catalog_user.yaml"
     clips_dir: str = "data/clips"
     logs_dir: str = "data/logs"
     captured_dir: str = "data/captured"
@@ -722,19 +746,24 @@ def load_controls_config(config_dir: Path | None = None) -> ControlsConfig:
     return _build(ControlsConfig, read_yaml(path), path)
 
 
-def item_classes(classes: dict[str, str], non_item_classes: list[str]) -> dict[str, str]:
-    """The classes a shopper may put on the list: ``classes`` minus the non-item ones (the hand).
+def load_catalog(path: Path, user_path: Path | None = None) -> Catalog:
+    """Load the preset item catalog, with the user's additions merged on top.
 
-    The detector still reports non-item classes; they just cannot be shopping-list items.
+    ``path`` is usually ``config/catalog.yaml``; a legacy ``classes:`` file also works.
+    ``user_path`` (``data/catalog_user.yaml``) may not exist yet and is written when the
+    first free-text item is added.
     """
-    skip = set(non_item_classes)
-    return {k: v for k, v in classes.items() if k not in skip}
+    try:
+        return _load_catalog(Path(path), Path(user_path) if user_path is not None else None)
+    except CatalogError as e:
+        raise ConfigError(f"invalid catalog in {path}: {e}") from e
 
 
 def load_classes(path: Path) -> dict[str, str]:
     """class_id -> spoken name (FR-62).
 
-    Reads a classes file such as config/classes.yaml, which looks like::
+    Reads an item catalog such as config/catalog.yaml, or a legacy classes file such as
+    config/classes_coco.yaml, which looks like::
 
         classes:
           pasta: pasta
@@ -743,9 +772,4 @@ def load_classes(path: Path) -> dict[str, str]:
     The keys are the ids the model outputs; the values are what the voice says. FR-62 is the
     requirement number in PRD.pdf.
     """
-    data = read_yaml(path)
-    classes = data.get("classes")
-    if not isinstance(classes, dict) or not classes:
-        raise ConfigError(f"{path} must contain a non-empty 'classes:' mapping")
-    # Force both sides to strings (YAML could parse a bare number as an int).
-    return {str(k): str(v) for k, v in classes.items()}
+    return load_catalog(path).spoken_map()

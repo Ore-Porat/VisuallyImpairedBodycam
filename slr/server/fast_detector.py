@@ -1,45 +1,75 @@
-"""Fast zero-shot grocery detector: YOLO-World boxes + CLIP labels + EgoHands hands.
+"""Fast zero-shot grocery detector: YOLO-World boxes + CLIP verification + EgoHands hands.
 
 This is the server-side port of ``p6k_egohands/scripts/infer_fast.py``. It runs
 in-process, once, in the server's detector thread. No subprocess is started per
 frame.
 
+WHAT CHANGED IN PHASE 1
+-----------------------
+The old pipeline classified each crop against a fixed list of 29 labels with a softmax.
+Softmax always picks something, so "not on the list" had to be faked with reject classes and
+a hand-maintained YOLO-keyword compatibility map. That map is gone.
+
+The detector now asks one question per item on the shopping list:
+
+    "does this crop match this item?"
+
+Each item has its own CLIP vector (its prompts, averaged). Similarity is a plain cosine
+score, not a probability. An item is accepted when its score clears ``fast_item_min_score``;
+when two or more items are on the list, the winner must also lead the runner-up by
+``fast_item_margin``. A close call produces no detection at all, which is safer than naming
+the wrong product.
+
+Prompt quality is what makes this work. Every item ships several prompts, and a box that
+YOLO calls a "can" is also compared with "a can of Coke" built from that label. The label is
+never emitted as an item; it only chooses which prompt text to use.
+
 One frame goes through:
 
 1. YOLO-World proposes generic product boxes (can, bottle, box, bag...).
 2. Each box is expanded by 10%, cropped, and padded to a square with grey.
-3. CLIP names the crop with one of the grocery classes (or a reject class).
-4. Boxes whose CLIP label is unknown, background, hand, or person are dropped.
+3. CLIP embeds the crop and compares it with the current list's prompt vectors.
+4. ``choose_item`` applies the threshold and margin; rejected boxes are dropped.
 5. Class-aware NMS removes duplicate boxes.
 6. EgoHands adds ``hand`` boxes, which are kept for the guidance engine.
 
 Heavy packages (``torch``, ``transformers``, ``ultralytics``, OpenCV, Pillow) are
 imported lazily so the Raspberry Pi never imports this module.
+
+WORDS YOU WILL SEE
+------------------
+- cosine similarity: the angle between two CLIP vectors, -1..1. Roughly 0.25-0.40 for a
+  match, lower for an unrelated product. It is not a probability.
+- prompt bank: the text vectors for the items currently on the shopping list. It is rebuilt
+  only when the list (or a prompt) changes.
+- threshold / margin: the two acceptance numbers, both calibrated by
+  ``training/calibrate_items.py`` (see docs/clip-item-verification.md).
 """
 
 from __future__ import annotations
 
 import logging
-from pathlib import Path
+import threading
+from dataclasses import dataclass, field
+from typing import Callable, Sequence
 
 import numpy as np
 
+from slr.common.catalog import CatalogItem
 from slr.common.config import ModelConfig, ServerConfig
 from slr.common.types import Detection
 from slr.server.detector import pick_device
-from slr.server.grocery_taxonomy import (
-    CLASS_DESCRIPTIONS,
-    DETECTOR_CLASSES,
-    DETECTOR_KEYWORDS,
-    HAND_CLASS,
-    REJECT_CLASSES,
-)
+from slr.server.grocery_taxonomy import DETECTOR_CLASSES, HAND_CLASS
 
 log = logging.getLogger(__name__)
 
-# Labels whose CLIP top-1 is already close enough to override the generic detector
-# label. Mirrors infer_fast.py: a "box" can become soda only if CLIP is this sure.
-DETECTOR_KEYWORD_BYPASS = 0.995
+# Container words used to turn YOLO's generic box label into a better prompt:
+# a box labelled "can" is compared with "a can of Coke" as well as the curated prompts.
+# "product" is not a container, so it is left out.
+PROMPT_LABELS: tuple[str, ...] = tuple(label for label in DETECTOR_CLASSES if label != "product")
+
+# Prompt used for an item that has no curated prompts (a free-text item).
+GENERIC_PROMPT = "a photo of {spoken}"
 
 
 def _pooled(output):
@@ -96,25 +126,6 @@ def prepare_crop(frame: np.ndarray, box, margin: float = 0.10) -> np.ndarray | N
     )
 
 
-def resolve_label(best_label: str, best_conf: float, detector_label: str,
-                  cls_conf: float) -> str:
-    """Turn CLIP's best guess into a final class id, or ``"unknown"``.
-
-    A crop is rejected when CLIP picked a reject class, when confidence is below
-    ``cls_conf``, or when the specific label contradicts the generic detector label
-    (for example "soda" from a bare "box"). Very confident CLIP labels bypass the
-    last check.
-    """
-    if best_label in REJECT_CLASSES or best_conf < cls_conf:
-        return "unknown"
-    keywords = DETECTOR_KEYWORDS.get(best_label)
-    if (keywords is not None
-            and not any(keyword in detector_label for keyword in keywords)
-            and best_conf < DETECTOR_KEYWORD_BYPASS):
-        return "unknown"
-    return best_label
-
-
 def class_aware_nms(products: list[dict], iou_threshold: float) -> list[dict]:
     """Keep the highest-confidence box per class, removing overlapping duplicates."""
     if not products:
@@ -136,50 +147,140 @@ def class_aware_nms(products: list[dict], iou_threshold: float) -> list[dict]:
     return kept
 
 
-def classifier_text_features(clip_processor, clip_model, labels: list[str],
-                             descriptions: dict[str, str], device: str):
-    """Embed every class prompt once, normalized for cosine similarity."""
-    import torch
-    import torch.nn.functional as F
-
-    texts = [descriptions[name] for name in labels]
-    with torch.no_grad():
-        inputs = clip_processor(text=texts, return_tensors="pt", padding=True).to(device)
-        inputs = model_dtype_inputs(inputs, clip_model)
-        features = _pooled(clip_model.get_text_features(**inputs))
-        features = F.normalize(features, dim=-1)
-    return features
+# --------------------------------------------------------------------------- prompt bank
 
 
-def classify_batch(clip_processor, clip_model, crops: list[np.ndarray], text_features,
-                   labels: list[str], device: str, batch_size: int) -> list[list[tuple[str, float]]]:
-    """Run CLIP on a list of BGR crops and return each crop's top-5 labels."""
-    import cv2
-    import torch
-    import torch.nn.functional as F
-    from PIL import Image
+@dataclass(frozen=True)
+class PromptBank:
+    """CLIP text vectors for the items currently on the shopping list.
 
-    results: list[list[tuple[str, float]]] = []
-    for start in range(0, len(crops), batch_size):
-        batch = crops[start:start + batch_size]
-        images = [Image.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)) for crop in batch]
-        with torch.no_grad():
-            inputs = clip_processor(images=images, return_tensors="pt").to(device)
-            inputs = model_dtype_inputs(inputs, clip_model)
-            features = _pooled(clip_model.get_image_features(**inputs))
-            features = F.normalize(features, dim=-1)
-            probs = ((features @ text_features.T) * 100).softmax(dim=-1)
-        for row in probs:
-            top_probs, top_indices = row.topk(min(5, len(labels)))
-            results.append([
-                (labels[int(index)], float(prob))
-                for prob, index in zip(top_probs, top_indices)
-            ])
-    return results
+    ids:        the item ids, in the same order as the rows of every matrix.
+    min_scores: the acceptance threshold for each item (the catalog entry's own value, or
+                the global setting).
+    any:        ``(n_items, dim)`` vectors averaged over all of an item's prompts.
+    by_label:   for each YOLO box label ("can", "bottle", ...), ``(n_items, dim)`` vectors
+                built from the curated prompts plus "a can of X". A crop labelled ``can``
+                is scored against this matrix, so the prompt matches what is visible.
+    key:        identity of the inputs, used to avoid rebuilding on every frame.
+    """
+
+    ids: tuple[str, ...]
+    min_scores: tuple[float, ...]
+    any: np.ndarray
+    by_label: dict[str, np.ndarray] = field(default_factory=dict)
+    key: tuple = ()
+
+    @property
+    def empty(self) -> bool:
+        return not self.ids
+
+
+def prompt_bank_key(items: Sequence[CatalogItem], min_score: float, from_box: bool) -> tuple:
+    """Everything that changes the text vectors (and therefore requires a rebuild)."""
+    return (tuple((it.id, it.spoken, it.prompts, it.min_score) for it in items),
+            float(min_score), bool(from_box))
+
+
+def _mean_normalized(features: np.ndarray, rows: list[int]) -> np.ndarray:
+    """Average rows and normalize the result (so a cosine is a dot product)."""
+    mean = features[rows].mean(axis=0)
+    norm = float(np.linalg.norm(mean))
+    return mean / norm if norm else mean
+
+
+def build_prompt_bank(items: Sequence[CatalogItem], encode: Callable[[list[str]], np.ndarray],
+                      min_score: float, from_box: bool = True) -> PromptBank:
+    """Build the text vectors for ``items``.
+
+    ``encode`` turns a list of prompt strings into a ``(n, dim)`` matrix of normalized CLIP
+    text vectors. It is a parameter so the grouping and averaging can be tested without
+    loading CLIP.
+    """
+    unique: list[str] = []
+    ids_by_text: dict[str, int] = {}
+
+    if not items:
+        return PromptBank(ids=(), min_scores=(), any=np.zeros((0, 0), dtype=np.float32),
+                          key=prompt_bank_key((), min_score, from_box))
+
+    def text_id(text: str) -> int:
+        if text not in ids_by_text:
+            ids_by_text[text] = len(unique)
+            unique.append(text)
+        return ids_by_text[text]
+
+    # Per item, per group name, the text ids that make up that vector.
+    groups: list[dict[str, list[int]]] = []
+    for item in items:
+        base = list(item.prompts) or [GENERIC_PROMPT.format(spoken=item.spoken)]
+        labels = PROMPT_LABELS if from_box else ()
+        generated = [text_id(f"a {label} of {item.spoken}") for label in labels]
+        per_item: dict[str, list[int]] = {"__all__": [text_id(t) for t in base] + generated}
+        for label in labels:
+            per_item[label] = [text_id(t) for t in base] + [text_id(f"a {label} of {item.spoken}")]
+        groups.append(per_item)
+
+    features = np.asarray(encode(unique), dtype=np.float32)
+    if features.ndim != 2 or features.shape[0] != len(unique):
+        raise ValueError("encode() must return one row per prompt")
+
+    def matrix(group: str) -> np.ndarray:
+        return np.stack([_mean_normalized(features, per_item[group]) for per_item in groups])
+
+    by_label = {label: matrix(label) for label in PROMPT_LABELS if from_box}
+    return PromptBank(
+        ids=tuple(item.id for item in items),
+        min_scores=tuple(float(item.min_score) if item.min_score is not None else float(min_score)
+                         for item in items),
+        any=matrix("__all__"),
+        by_label=by_label,
+        key=prompt_bank_key(items, min_score, from_box),
+    )
+
+
+def score_crops(image_features: np.ndarray, bank: PromptBank,
+                labels: Sequence[str]) -> np.ndarray:
+    """Cosine score of every crop against every list item, shape ``(n_crops, n_items)``.
+
+    A crop's YOLO label selects the prompt variant for that container when one exists:
+    a "can" box is compared with "a can of Coke", not only with the generic prompts.
+    """
+    scores = image_features @ bank.any.T
+    if bank.by_label:
+        for label in set(labels):
+            matrix = bank.by_label.get(label)
+            if matrix is None:
+                continue
+            rows = [i for i, value in enumerate(labels) if value == label]
+            scores[rows] = image_features[rows] @ matrix.T
+    return scores
+
+
+def choose_item(scores: np.ndarray, ids: Sequence[str], min_scores: Sequence[float],
+                margin: float) -> tuple[str, float] | None:
+    """Pick the list item this crop matches, or None.
+
+    Rules:
+    - the best score must clear that item's own threshold;
+    - with two or more items, it must also lead the runner-up by ``margin``. A close call
+      returns None: saying nothing is safer than naming the wrong product.
+    """
+    if not ids or len(scores) == 0:
+        return None
+    order = np.argsort(scores)[::-1]
+    best = int(order[0])
+    if scores[best] < min_scores[best]:
+        return None
+    if len(ids) >= 2 and float(scores[best] - scores[order[1]]) < margin:
+        return None
+    return str(ids[best]), float(scores[best])
+
+
+# --------------------------------------------------------------------------- detector
 
 
 class FastGroceryDetector:
-    """The shipped detector: YOLO-World products, CLIP labels, and EgoHands hands."""
+    """The shipped detector: YOLO-World proposals, CLIP verification, EgoHands hands."""
 
     names: list[str]
 
@@ -239,12 +340,17 @@ class FastGroceryDetector:
         if self.clip_half:
             self.clip_model = self.clip_model.half()
 
-        self.labels = list(CLASS_DESCRIPTIONS) + list(REJECT_CLASSES)
-        descriptions = {**CLASS_DESCRIPTIONS, **REJECT_CLASSES}
-        self.text_features = classifier_text_features(
-            self.clip_processor, self.clip_model, self.labels, descriptions, self.device
-        )
-        self.names = list(CLASS_DESCRIPTIONS) + [HAND_CLASS]
+        # Acceptance numbers (see docs/clip-item-verification.md and the calibration report).
+        self.min_score = float(m.fast_item_min_score)
+        self.margin = float(m.fast_item_margin)
+        self.from_box = bool(m.fast_prompt_from_box)
+
+        # The current shopping list and its text vectors. ``set_items`` may be called from
+        # the event loop while the detector thread is working, hence the lock.
+        self._lock = threading.Lock()
+        self._items: tuple[CatalogItem, ...] = ()
+        self._bank: PromptBank | None = None
+        self.names = [HAND_CLASS]
 
         log.info(
             "fast grocery detector: %s on %s; CLIP %s (%s); hands %s",
@@ -253,44 +359,91 @@ class FastGroceryDetector:
             self.hand_path.name if self.hand_path is not None else "off",
         )
 
+    # ------------------------------------------------------------------ list wiring
+
+    def set_items(self, items: Sequence[CatalogItem]) -> None:
+        """Tell the detector which items are on the shopping list.
+
+        Cheap: only stores the tuple and updates ``names``. The text vectors are built on the
+        detector thread at the start of the next frame, so the event loop never runs CLIP.
+        """
+        with self._lock:
+            self._items = tuple(items)
+            self.names = [item.id for item in items] + [HAND_CLASS]
+
+    def _bank_for_current_items(self) -> PromptBank | None:
+        """Return the cached prompt bank, rebuilding it if the list or a prompt changed."""
+        with self._lock:
+            items = self._items
+            cached = self._bank
+        if not items:
+            return None
+        key = prompt_bank_key(items, self.min_score, self.from_box)
+        if cached is not None and cached.key == key:
+            return cached
+        bank = build_prompt_bank(items, self._encode_texts, self.min_score, self.from_box)
+        with self._lock:
+            self._bank = bank
+        log.info("prompt bank rebuilt for %d list item(s): %s", len(bank.ids), list(bank.ids))
+        return bank
+
+    # ------------------------------------------------------------------ model calls
+
+    def _encode_texts(self, texts: list[str]) -> np.ndarray:
+        """CLIP text vectors, normalized and on the CPU (the bank is small)."""
+        import torch
+        import torch.nn.functional as F
+
+        with torch.no_grad():
+            inputs = self.clip_processor(text=texts, return_tensors="pt",
+                                         padding=True).to(self.device)
+            inputs = model_dtype_inputs(inputs, self.clip_model)
+            features = _pooled(self.clip_model.get_text_features(**inputs))
+            features = F.normalize(features, dim=-1)
+        return features.float().cpu().numpy()
+
+    def _embed_crops(self, crops: list[np.ndarray]) -> np.ndarray:
+        """CLIP image vectors, normalized, shape ``(n_crops, dim)``."""
+        import cv2
+        import torch
+        import torch.nn.functional as F
+        from PIL import Image
+
+        out: list[np.ndarray] = []
+        for start in range(0, len(crops), self.m.fast_clip_batch):
+            batch = crops[start:start + self.m.fast_clip_batch]
+            images = [Image.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)) for crop in batch]
+            with torch.no_grad():
+                inputs = self.clip_processor(images=images, return_tensors="pt").to(self.device)
+                inputs = model_dtype_inputs(inputs, self.clip_model)
+                features = _pooled(self.clip_model.get_image_features(**inputs))
+                features = F.normalize(features, dim=-1)
+            out.append(features.float().cpu().numpy())
+        return np.concatenate(out, axis=0) if out else np.zeros((0, 1), dtype=np.float32)
+
     def warmup(self) -> None:
         """Run one dummy frame and one dummy crop so the first real frame is fast."""
         dummy = np.zeros((480, 640, 3), dtype=np.uint8)
-        self._detect_products(dummy)
+        self._detect_products(dummy)          # builds the prompt bank if a list is loaded
         if self.hand_model is not None:
             self._detect_hands(dummy)
-        # Even a blank frame may produce no boxes, so explicitly warm CLIP.
-        self._classify_crops([np.full((224, 224, 3), 114, dtype=np.uint8)])
+        # Even a frame with no boxes must warm the CLIP image path.
+        self._embed_crops([np.full((224, 224, 3), 114, dtype=np.uint8)])
 
     def detect(self, image: np.ndarray) -> list[Detection]:
         """Return product and hand detections for one BGR frame, normalized 0..1."""
         if image is None or image.size == 0:
             return []
-        height, width = image.shape[:2]
-        products = class_aware_nms(self._detect_products(image), self.m.fast_nms_iou)
+        products = self._detect_products(image)
+        return products + self._detect_hands(image)
 
-        out: list[Detection] = []
-        for product in products:
-            if product["label"] == "unknown":
-                continue
-            x1, y1, x2, y2 = product["box"]
-            out.append(Detection(
-                product["label"], float(product["score"]),
-                x1 / width, y1 / height, x2 / width, y2 / height,
-            ))
-        out.extend(self._detect_hands(image))
-        return out
-
-    def _classify_crops(self, crops: list[np.ndarray]) -> list[list[tuple[str, float]]]:
-        if not crops:
+    def _detect_products(self, image: np.ndarray) -> list[Detection]:
+        """Run YOLO-World, verify each box against the list, and keep the matches."""
+        bank = self._bank_for_current_items()
+        if bank is None or bank.empty:
+            # No list, no targets: skip YOLO and CLIP entirely. Hands still work.
             return []
-        return classify_batch(
-            self.clip_processor, self.clip_model, crops, self.text_features,
-            self.labels, self.device, self.m.fast_clip_batch,
-        )
 
-    def _detect_products(self, image: np.ndarray) -> list[dict]:
-        """Run YOLO-World, crop each box, and let CLIP assign a label."""
         result = self.detector.predict(
             image,
             imgsz=self.m.fast_detector_imgsz,
@@ -324,25 +477,30 @@ class FastGroceryDetector:
             if crop is None:
                 continue
             crops.append(crop)
-            candidates.append({
-                "box": [x1, y1, x2, y2],
-                "detector_score": float(score),
-                "detector_label": detector_label,
-            })
+            candidates.append({"box": [x1, y1, x2, y2], "detector_label": detector_label})
 
-        tops = self._classify_crops(crops)
+        if not crops:
+            return []
+        features = self._embed_crops(crops)
+        scores = score_crops(features, bank, [c["detector_label"] for c in candidates])
+
         products: list[dict] = []
-        for candidate, top in zip(candidates, tops):
-            best_label, best_conf = top[0]
-            candidate.update({
-                "label": resolve_label(
-                    best_label, best_conf, candidate["detector_label"], self.m.fast_clip_conf
-                ),
-                "score": best_conf,
-                "top": top,
+        for candidate, row in zip(candidates, scores):
+            chosen = choose_item(row, bank.ids, bank.min_scores, self.margin)
+            if chosen is None:
+                continue
+            label, confidence = chosen
+            products.append({
+                "label": label,
+                "score": confidence,
+                "box": candidate["box"],
             })
-            products.append(candidate)
-        return products
+        return [
+            Detection(product["label"], float(product["score"]),
+                      product["box"][0] / width, product["box"][1] / height,
+                      product["box"][2] / width, product["box"][3] / height)
+            for product in class_aware_nms(products, self.m.fast_nms_iou)
+        ]
 
     def _detect_hands(self, image: np.ndarray) -> list[Detection]:
         """Run EgoHands and return its boxes as ``hand`` detections."""

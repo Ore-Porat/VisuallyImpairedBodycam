@@ -160,8 +160,11 @@ def test_clip_store_renders_once_and_manifest(tmp_path, catalog):
     assert reloaded.manifest_hash() == h
 
 
-def test_item_classes_drops_the_hand():
-    from slr.common.config import item_classes
-    classes = {"pasta": "pasta", "hand": "hand", "rice": "rice"}
-    assert item_classes(classes, ["hand"]) == {"pasta": "pasta", "rice": "rice"}
-    assert item_classes(classes, []) == classes
+def test_catalog_item_map_drops_the_hand():
+    """The hand is a detector class, never something the shopper can add."""
+    from slr.common.catalog import load_catalog
+    from conftest import ROOT
+
+    catalog = load_catalog(ROOT / "config" / "catalog.yaml")
+    assert "hand" not in catalog.item_map()
+    assert catalog.spoken_map()["hand"] == "hand"

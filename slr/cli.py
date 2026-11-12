@@ -46,8 +46,8 @@ import sys
 import time
 from pathlib import Path
 
-from slr.common.config import (ConfigError, default_config_dir, item_classes, load_classes, load_controls_config,
-                               load_device_config, load_server_config)
+from slr.common.config import (ConfigError, default_config_dir, load_catalog,
+                               load_controls_config, load_device_config, load_server_config)
 
 
 def _setup_logging(verbose: bool) -> None:
@@ -128,21 +128,22 @@ def cmd_list(args) -> None:
     from slr.server.session import ListError, ShoppingList
 
     cfg = load_server_config(args.config_dir)
-    # Valid item names come from the model's class list.
-    classes = item_classes(load_classes(cfg.path(cfg.model.classes_file)),
-                           cfg.guidance.non_item_classes)   # no "hand" on the list
-    lst = ShoppingList(cfg.path(cfg.paths.shopping_list), classes)
+    # The catalog knows preset prompts and any items the user added before.
+    catalog = load_catalog(cfg.path(cfg.model.catalog_file), cfg.path(cfg.paths.user_catalog))
+    lst = ShoppingList(cfg.path(cfg.paths.shopping_list), catalog)
     # ``slr list add tomato sauce`` arrives as two words; join them back into one name.
     # getattr(..., None) is used because "show"/"clear" have no ``item`` argument at all.
     name = " ".join(args.item) if getattr(args, "item", None) else ""
     try:
         if args.list_cmd == "add":
             cls = lst.add(name)
-            # classes.get(cls, cls) prints the spoken name if there is one, else the id.
-            print(f"Added {classes.get(cls, cls)}.")
+            print(f"Added {catalog.spoken(cls)}.")
+            if cls in lst.uncurated_items():
+                print("  It uses generated prompts. Improve them with "
+                      "`slr list prompts` or the web page's item prompts editor.")
         elif args.list_cmd == "remove":
             cls = lst.remove(name)
-            print(f"Removed {classes.get(cls, cls)}.")
+            print(f"Removed {catalog.spoken(cls)}.")
         elif args.list_cmd == "clear":
             lst.clear()
             print("List cleared.")
@@ -150,7 +151,25 @@ def cmd_list(args) -> None:
             lst.reset()
             print("All items marked pending.")
         elif args.list_cmd == "classes":
-            print("Valid items: " + ", ".join(sorted(classes)))
+            presets = {k: v for k, v in catalog.item_map().items() if catalog.is_preset(k)}
+            custom = {k: v for k, v in catalog.item_map().items() if not catalog.is_preset(k)}
+            print("Preset items: " + ", ".join(sorted(presets)))
+            if custom:
+                print("Your items:   " + ", ".join(sorted(custom)))
+            return
+        elif args.list_cmd == "prompts":
+            item = catalog.resolve(name)
+            if item is None:
+                print(f"error: '{name}' is not in the catalog", file=sys.stderr)
+                sys.exit(2)
+            source = "preset" if catalog.is_preset(item.id) else "custom"
+            if not item.prompts:
+                source = "generated"
+            print(f"{item.spoken} ({item.id}): {source}")
+            for prompt in catalog.prompts_for(item):
+                print(f"  {prompt}")
+            if not item.prompts:
+                print("  Add your own with the web page's item prompts editor.")
             return
     except ListError as e:
         # e.g. an item name the model does not know. Print to stderr and exit with code 2.
@@ -263,7 +282,8 @@ def cmd_clips(args) -> None:
     # Pick the first TTS engine from the config that actually works on this machine.
     tts = make_tts(cfg.tts, cfg)
     print(f"TTS engine: {tts.name}")
-    classes = load_classes(cfg.path(cfg.model.classes_file))
+    classes = load_catalog(cfg.path(cfg.model.catalog_file),
+                           cfg.path(cfg.paths.user_catalog)).spoken_map()
     # The catalog is every sentence the product can say, from config/phrases.yaml, with item
     # names filled in. The voice tag keeps clips from different voices apart.
     catalog = PhraseCatalog.load(cfg.root / "config" / "phrases.yaml", classes, voice_tag(cfg.tts, tts))
@@ -488,7 +508,8 @@ def build_parser() -> argparse.ArgumentParser:
     lsub.add_parser("remove").add_argument("item", nargs="+")
     lsub.add_parser("clear")
     lsub.add_parser("reset", help="mark every item pending again")
-    lsub.add_parser("classes", help="list valid item names")
+    lsub.add_parser("classes", help="list preset and custom item names")
+    lsub.add_parser("prompts", help="show an item's CLIP prompts").add_argument("item", nargs="+")
     s.set_defaults(func=cmd_list)
 
     # slr bench

@@ -7,8 +7,7 @@ What is a test file?
 What is being tested here?
     ``ShoppingList`` keeps the user's list of items in a small YAML file on the laptop
     (normally data/shopping_list.yaml). It must:
-      * accept only item names the detector knows (so you cannot search for "spaghetti"
-        when the model only knows "pasta"),
+      * accept preset item names and, with a Catalog, create a new item for free text,
       * understand both the internal id ("tomato_sauce") and the spoken name
         ("tomato sauce"), in any capitalization,
       * remember which items are already found, and which one is "current",
@@ -120,3 +119,58 @@ def test_describe(lst):
     assert "empty" in lst.describe()
     lst.add("tomato_sauce")
     assert "tomato sauce" in lst.describe()
+
+
+# --------------------------------------------------------------------------- free text
+
+
+def catalog(tmp_path):
+    """A tiny catalog with one preset, backed by a user file in the temporary folder."""
+    from slr.common.catalog import Catalog, CatalogItem
+
+    return Catalog(
+        preset={"pasta": CatalogItem("pasta", "pasta", ("a package of pasta",))},
+        user_path=tmp_path / "catalog_user.yaml",
+    )
+
+
+def test_free_text_item_is_created_and_persisted(tmp_path):
+    """With a Catalog, an unknown name becomes a real item instead of an error."""
+    from slr.common.catalog import load_catalog
+
+    presets = tmp_path / "catalog.yaml"
+    presets.write_text("items:\n  pasta:\n    spoken: pasta\n", encoding="utf-8")
+    cat = load_catalog(presets, tmp_path / "catalog_user.yaml")
+    lst = ShoppingList(tmp_path / "list.yaml", cat)
+    cls = lst.add("Blue Gatorade")
+    assert cls == "blue_gatorade"
+    assert [it.name for it in lst.items] == ["blue_gatorade"]
+    assert lst.known["blue_gatorade"] == "Blue Gatorade"
+    assert (tmp_path / "catalog_user.yaml").exists()
+
+    # A new process sees the item, its id and its spoken name.
+    again = load_catalog(presets, tmp_path / "catalog_user.yaml")
+    assert again.item("blue_gatorade").spoken == "Blue Gatorade"
+
+
+def test_free_text_remove_uses_the_spoken_name(tmp_path):
+    lst = ShoppingList(tmp_path / "list.yaml", catalog(tmp_path))
+    lst.add("Blue Gatorade")
+    assert lst.remove("blue gatorade") == "blue_gatorade"
+    assert lst.items == []
+
+
+def test_uncurated_items_lists_generated_prompt_items(tmp_path):
+    """The page marks items whose prompts are generated, so the helper can improve them."""
+    cat = catalog(tmp_path)
+    lst = ShoppingList(tmp_path / "list.yaml", cat)
+    lst.add("pasta")             # curated preset
+    lst.add("Blue Gatorade")     # generated
+    assert lst.uncurated_items() == ["blue_gatorade"]
+
+
+def test_dict_mode_still_rejects_unknown_items(tmp_path):
+    """Backwards compatibility: without a Catalog, the old strict behavior is unchanged."""
+    lst = ShoppingList(tmp_path / "list.yaml", KNOWN)
+    with pytest.raises(ListError):
+        lst.add("spaghetti")
