@@ -1,0 +1,55 @@
+# Extra spoken names for shopping list items, used by voice commands ("add coke").
+#
+# What this file is for
+#   Voice commands already understand every item's id, spoken name and aliases from the item
+#   catalog (config/catalog.yaml plus data/catalog_user.yaml), including items typed in on the
+#   web page. This file adds the other words a shopper might SAY for the same item:
+#   singulars, everyday names, other brands of the same thing. Saying any of them adds that
+#   item, so "add a Pepsi" puts soda on the list and "add Coke" puts Coca-Cola on it.
+#
+# Who reads it
+#   slr/server/voice.py, when the server or `slr list web` starts. config/server.yaml points
+#   at it with `voice.aliases_file`. Restart the server after editing.
+#
+# How to edit safely
+#   One line per item id:   id: [name, other name, ...]
+#   Write names the way people say them; capitals, apostrophes and hyphens are ignored, so
+#   "Coca-Cola" and "coca cola" are the same. Every word must be in the speech model's
+#   dictionary; the server logs a warning for a word it does not know and ignores it.
+#   When two names overlap, the longer one wins: "Lay's chips" is lays, "chips" is chips.
+#   An id that is not in the catalog is ignored with a warning.
+aliases:
+  beans: [bean, baked beans, black beans, kidney beans]
+  cake: [cakes, cupcake, cupcakes]
+  candy: [candies, sweets, gummy bears, lollipop]
+  cereal: [cereals, corn flakes, oatmeal, granola]
+  chips: [chip, potato chips, crisps, doritos, tortilla chips]
+  chocolate: [chocolate bar, chocolates, milk chocolate, snickers]
+  coffee: [coffee beans, ground coffee, espresso]
+  corn: [sweet corn, canned corn]
+  fish: [tuna, salmon, sardines, canned fish, canned tuna]
+  flour: [all purpose flour]
+  honey: []
+  jam: [jelly, jams, strawberry jam, preserves]
+  juice: [juices, orange juice, apple juice]
+  milk: [whole milk, skim milk]
+  nuts: [nut, peanuts, almonds, cashews, mixed nuts]
+  oil: [olive oil, cooking oil, vegetable oil]
+  pasta: [spaghetti, noodles, macaroni, penne]
+  rice: [white rice, brown rice]
+  soda: [sodas, pop, soft drink, soft drinks, pepsi, sprite, cola]
+  spices: [spice, pepper, cinnamon, seasoning]
+  sugar: [brown sugar]
+  tea: [tea bags, green tea]
+  tomato_sauce: [pasta sauce, marinara, spaghetti sauce]
+  vinegar: []
+  water: [bottled water, sparkling water]
+  cookies: [cookie, biscuits, chips ahoy]
+  # Demo-shelf brands. The catalog already knows their names and typed aliases ("coke",
+  # "oreos"); these are extra ways to say them.
+  lays: [lays potato chips]
+  oreo: [oreo cookie]
+  coca_cola_can: [cokes, can of coke, coca cola]
+  chicken_noodle_soup: [chicken noodle, chicken soup, noodle soup, soup, soups, campbells,
+                        campbells soup]
+  cheerios: [cheerio cereal]

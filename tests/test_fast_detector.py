@@ -99,6 +99,23 @@ def test_an_item_without_prompts_gets_a_generated_one():
     assert bank.any.shape[0] == 1
 
 
+def test_custom_items_are_prompted_as_photos_presets_as_written():
+    """Custom items read as photos ("a photo of a can of X"); presets keep their wording."""
+    seen = []
+
+    def recording(texts):
+        seen.extend(texts)
+        return fake_encoder(texts)
+
+    custom = CatalogItem(id="kombucha", spoken="kombucha", prompts=("a glass bottle",),
+                         preset=False)
+    build_prompt_bank([custom, item("coke", ["a red can of Coke"])], recording, 0.3)
+    mine = [s for s in seen if "kombucha" in s or "glass bottle" in s]
+    assert mine and all(s.startswith("a photo of") for s in mine)
+    assert "a photo of a can of kombucha" in seen
+    assert "a red can of Coke" in seen and "a can of coke" in seen
+
+
 def test_per_item_threshold_overrides_the_global_one():
     bank = build_prompt_bank(
         [item("coke", ["a can"], min_score=0.41), item("sprite", ["a can"])],

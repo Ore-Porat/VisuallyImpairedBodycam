@@ -62,10 +62,11 @@ from slr.server.clips import ClipStore, PhraseCatalog, make_tts, voice_tag
 from slr.server.core import ServerCore
 from slr.server.detector import Detector, decode_jpeg, load_detector, timed_detect
 from slr.server.frame_receiver import FrameReceiver, ReceivedFrame
-from slr.server.list_web import HttpServer, make_handler
+from slr.server.list_web import HttpServer, edit_prompts, make_handler, prompt_entries
 from slr.server.motion import MotionEstimator
 from slr.server.session import ListError, ShoppingList
 from slr.server.session_log import SessionLog
+from slr.server.voice import build_voice
 
 log = logging.getLogger(__name__)
 
@@ -159,9 +160,11 @@ class ServerApp:
         log.info("WebSocket control channel on %s:%d", cfg.network.host, cfg.network.ws_port)
 
         # The small HTTP server: clip downloads for the device + the list editor page.
+        # Voice commands on that page ("add chips"); the speech model loads in the background.
+        voice = build_voice(cfg, self.items_catalog, self._list_op_threadsafe, self._page_data)
         handler = make_handler(self._page_data, self._list_op_threadsafe, self.clips.manifest,
                                self.clips.path, self._prompts_data_threadsafe,
-                               self._prompt_op_threadsafe)
+                               self._prompt_op_threadsafe, voice)
         self.http = HttpServer(cfg.network.host, cfg.network.http_port, handler)
         self.http.start()
         log.info("clips + list editor on http://%s:%d/", cfg.network.host, cfg.network.http_port)
@@ -477,27 +480,7 @@ class ServerApp:
 
     def _prompts_data(self):
         """Everything the prompt editor needs: every catalog item plus anything on the list."""
-        on_list = [it.name for it in self.shopping.items]
-        ids = list(self.items_catalog.item_ids)
-        for item_id in on_list:
-            if item_id not in ids:
-                ids.append(item_id)
-        out = []
-        for item_id in ids:
-            item = self.items_catalog.items_for([item_id])[0]
-            preset = self.items_catalog.preset.get(item_id)
-            out.append({
-                "id": item_id,
-                "spoken": item.spoken,
-                "on_list": item_id in on_list,
-                "preset": preset is not None,
-                "override": item_id in self.items_catalog.user and preset is not None,
-                "user_only": item_id in self.items_catalog.user and preset is None,
-                "prompts": list(self.items_catalog.prompts_for(item)),
-                "generated": not item.prompts,
-                "preset_prompts": list(preset.prompts) if preset else [],
-            })
-        return out
+        return prompt_entries(self.items_catalog, [it.name for it in self.shopping.items])
 
     def _prompt_op_threadsafe(self, item_id: str, text: str, action: str) -> str:
         """Called from the HTTP server's thread: run ``_prompt_op`` on the event loop."""
@@ -506,15 +489,7 @@ class ServerApp:
 
     async def _prompt_op(self, item_id: str, text: str, action: str) -> str:
         """Save or restore an item's CLIP prompts, then refresh the detector's prompt bank."""
-        if action == "restore":
-            self.items_catalog.restore_prompts(item_id)
-            msg = f"Restored the default prompts for {self.items_catalog.spoken(item_id)}."
-        elif action == "save":
-            prompts = [line.strip() for line in text.splitlines() if line.strip()]
-            self.items_catalog.set_prompts(item_id, prompts)
-            msg = f"Saved {len(prompts)} prompt(s) for {self.items_catalog.spoken(item_id)}."
-        else:
-            raise ValueError(f"unknown prompt action {action!r}")
+        msg = edit_prompts(self.items_catalog, item_id, text, action)
         self._refresh_vocabulary()
         self._sync_detector_items()
         return msg

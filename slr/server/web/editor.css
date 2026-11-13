@@ -1,0 +1,69 @@
+/* Shopping list editor (slr/server/list_web.py). Large, high-contrast text; plain controls. */
+
+body {
+  font-family: system-ui, sans-serif;
+  font-size: 1.15rem;
+  line-height: 1.5;
+  max-width: 50rem;
+  margin: 1rem auto;
+  padding: 0 1rem;
+  color: #111;
+  background: #fff;
+}
+
+button, input { font-size: 1rem; padding: .3rem .6rem; }
+
+/* A thick visible focus ring so keyboard users can see where they are. */
+:focus { outline: 3px solid #1a5fb4; outline-offset: 2px; }
+
+.inline { display: inline; }
+#status { font-weight: bold; min-height: 1.5em; }
+#list-heading:focus { outline: none; }
+
+.rows { padding-left: 1.5rem; }
+.rows li { margin-bottom: .5rem; }
+.rows img { vertical-align: middle; margin-right: .4rem; }
+.rows li.found .info { color: #555; text-decoration: line-through; }
+.whole { margin: 1rem 0; }
+
+.grid {
+  list-style: none;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(8.5rem, 1fr));
+  gap: .75rem;
+}
+.tile button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  background: #f4f4f4;
+  border: 1px solid #bbb;
+  border-radius: 4px;
+}
+.tile button:hover { background: #e8e8e8; }
+.tile.on button { border: 2px solid #26a269; }
+.tile .count { display: block; text-align: center; font-size: .9rem; color: #1e7a4c; min-height: 1.3em; }
+.tile[hidden] { display: none; }
+
+/* The voice button: big enough to find, with a clear "listening" state. */
+.talk {
+  font-size: 1.4rem;
+  font-weight: bold;
+  padding: 1rem 2rem;
+  min-width: 16rem;
+  color: #fff;
+  background: #1a5fb4;
+  border: 0;
+  border-radius: 8px;
+}
+.talk .listening { display: none; }
+.talk.on { background: #c01c28; }
+.talk.on .listening { display: inline; }
+.talk.busy { opacity: .7; cursor: progress; }
+#voice[hidden], #voice-hint[hidden], #speak-option[hidden] { display: none; }
+.heard { color: #1e7a4c; font-weight: bold; min-height: 1.5em; margin: 0; }
+
+h3 { margin-bottom: .4rem; }
+.grid[hidden] { display: none; }

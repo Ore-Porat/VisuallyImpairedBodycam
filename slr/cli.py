@@ -1,4 +1,4 @@
-"""`slr` command line: sim, server, device, list, bench, replay, clips.
+"""`slr` command line: sim, server, device, list, bench, replay, clips, voice.
 
 How it fits in
 --------------
@@ -120,7 +120,7 @@ def cmd_device(args) -> None:
 
 
 def cmd_list(args) -> None:
-    """``slr list show|add|remove|clear|reset|classes``: view and edit the shopping list.
+    """``slr list show|add|remove|clear|reset|classes|web``: view and edit the shopping list.
 
     The list is a small YAML file (data/shopping_list.yaml) shared with the running server,
     which notices the change and reloads it.
@@ -131,6 +131,11 @@ def cmd_list(args) -> None:
     # The catalog knows preset prompts and any items the user added before.
     catalog = load_catalog(cfg.path(cfg.model.catalog_file), cfg.path(cfg.paths.user_catalog))
     lst = ShoppingList(cfg.path(cfg.paths.shopping_list), catalog)
+    if args.list_cmd == "web":
+        # Only the web page: no camera, no models, starts in about a second.
+        from slr.server.list_web import serve_list_only
+        serve_list_only(lst, catalog, args.host, args.port or cfg.network.http_port, cfg)
+        return
     # ``slr list add tomato sauce`` arrives as two words; join them back into one name.
     # getattr(..., None) is used because "show"/"clear" have no ``item`` argument at all.
     name = " ".join(args.item) if getattr(args, "item", None) else ""
@@ -177,6 +182,51 @@ def cmd_list(args) -> None:
         sys.exit(2)
     # Every command except "classes" ends by showing the current list ("show" does only this).
     print(lst.describe())
+
+
+def cmd_voice(args) -> None:
+    """``slr voice download-model|hear``: voice commands for the list page ("add chips").
+
+    - download-model: fetch the offline speech models (one time, needs internet): Vosk for
+      commands and known items, Whisper for new item names.
+    - hear: run a WAV file or a typed sentence through recognition and parsing and print what
+      would happen, without changing the list. Useful when a word keeps being misheard.
+    """
+    from slr.server.voice import (VoiceAssistant, download_model, download_whisper, fix_dictation,
+                                  load_aliases, parse)
+
+    cfg = load_server_config(args.config_dir)
+    if args.voice_cmd == "download-model":
+        print(f"speech model saved to {download_model(cfg)}")
+        if cfg.voice.whisper_enabled:
+            print(f"Whisper models saved to {download_whisper(cfg)}")
+        return
+    catalog = load_catalog(cfg.path(cfg.model.catalog_file), cfg.path(cfg.paths.user_catalog))
+    known = catalog.item_map()
+    assistant = VoiceAssistant(catalog, load_aliases(cfg.path(cfg.voice.aliases_file), known),
+                               lambda op, arg: "", lambda: ([], 0, known))
+    text = " ".join(args.what)
+    readings = [("typed", text)]
+    if text.lower().endswith(".wav"):
+        import wave
+
+        assistant.load_recognizer(cfg.path(cfg.voice.model_dir))
+        if cfg.voice.whisper_enabled:
+            assistant.load_checker(cfg)
+        with wave.open(text, "rb") as w:
+            if w.getnchannels() != 1 or w.getsampwidth() != 2:
+                raise SystemExit("need a mono 16-bit WAV file")
+            rate, pcm = w.getframerate(), w.readframes(w.getnframes())
+        readings = [("word list", assistant.transcribe(pcm, rate))]
+        if assistant.checker is not None:
+            readings.append(("Whisper", fix_dictation(assistant.checker.transcribe(pcm, rate))))
+    for source, heard in readings:
+        cmd = parse(heard, assistant.phrases)
+        print(f"{source}: {heard!r}")
+        print(f"  action:    {cmd.action}")
+        print(f"  items:     {', '.join(f'{n} x {c}' for c, n in zip(cmd.items, cmd.counts)) or '-'}")
+        if cmd.new_names:
+            print(f"  new items: {', '.join(f'{n} x {name}' for name, n in cmd.new_names)}")
 
 
 def cmd_replay(args) -> None:
@@ -510,6 +560,9 @@ def build_parser() -> argparse.ArgumentParser:
     lsub.add_parser("reset", help="mark every item pending again")
     lsub.add_parser("classes", help="list preset and custom item names")
     lsub.add_parser("prompts", help="show an item's CLIP prompts").add_argument("item", nargs="+")
+    w = lsub.add_parser("web", help="run only the list web page (no camera or models)")
+    w.add_argument("--port", type=int, default=None, help="default: network.http_port (8767)")
+    w.add_argument("--host", default="127.0.0.1", help="use 0.0.0.0 to open it from a phone")
     s.set_defaults(func=cmd_list)
 
     # slr bench
@@ -539,6 +592,15 @@ def build_parser() -> argparse.ArgumentParser:
     csub.add_parser("build-system", help="render the device's local system clips")
     csub.add_parser("download-voice", help="download the Piper voice (one time, needs internet)")
     s.set_defaults(func=cmd_clips)
+
+    # slr voice <sub-command>
+    s = sub.add_parser("voice", help="voice commands for the list page")
+    vsub = s.add_subparsers(dest="voice_cmd", required=True)
+    vsub.add_parser("download-model",
+                    help="download the offline speech model (one time, needs internet)")
+    vsub.add_parser("hear", help="show how a sentence or a mono WAV file is understood").add_argument(
+        "what", nargs="+", help='a sentence ("add coke") or a .wav file')
+    s.set_defaults(func=cmd_voice)
     return ap
 
 

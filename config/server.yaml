@@ -36,7 +36,7 @@ model:
 
   # YOLO-World product detector. shelf_world_s.engine is faster; shelf_world.engine has
   # higher recall if a few FPS matter less.
-  fast_detector_engine: models/tensorrt/shelf_world_s.engine
+  fast_detector_engine: models/yolov8s-worldv2.pt
   fast_detector_imgsz: 640
   fast_detector_conf: 0.01   # low for webcam recall; use 0.1-0.25 on dense shelves
   fast_detector_iou: 0.5
@@ -54,7 +54,7 @@ model:
   fast_clip_batch: 16
 
   # EgoHands hand detector. Set fast_hand_engine: null to disable hands.
-  fast_hand_engine: models/tensorrt/hand_egohands_960.engine
+  fast_hand_engine: models/hand_best.pt
   fast_hand_imgsz: 960
   fast_hand_conf: 0.55
   fast_max_hands: 2
@@ -179,6 +179,22 @@ tts:
   piper_voice_url: https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx
   length_scale: 1.0      # FR-66 speech rate: < 1 is faster, > 1 slower
   sample_rate: 22050     # audio samples per second of the generated clips
+
+# Voice commands on the list editor page ("add chips", "what's on my list").
+# Recognition runs offline on this laptop with Vosk. Open the page as http://localhost:8767/
+# on the laptop itself: browsers only allow the microphone on localhost or HTTPS.
+voice:
+  enabled: true
+  model_dir: models/vosk/vosk-model-small-en-us-0.15   # downloaded by `slr voice download-model`
+  model_url: https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
+  aliases_file: config/voice_aliases.yaml   # extra names per item: coke -> Coca-Cola, ...
+  # Whisper re-reads a finished sentence that may name a brand-new item ("add kombucha"),
+  # so anything can be added by voice; the shopper is asked before a new item is created.
+  whisper_enabled: true
+  whisper_dir: models/whisper      # downloaded by `slr voice download-model`
+  whisper_model_gpu: small.en      # about 0.2 s per sentence on the laptop GPU
+  whisper_model_cpu: base.en       # about 1.2 s per sentence without a GPU
+  whisper_device: auto             # auto | cuda | cpu
 
 # Where the server keeps its files (relative to the repo folder).
 paths:

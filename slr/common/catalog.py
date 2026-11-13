@@ -119,6 +119,47 @@ def default_prompts(spoken: str) -> tuple[str, ...]:
     return (GENERIC_PROMPT.format(spoken=spoken),)
 
 
+# Openings that already describe a picture; anything else gets "a photo of " in front.
+_PHOTO_OPENINGS = ("a photo of", "a photograph of", "photo of", "a picture of", "an image of")
+
+
+def as_photo_prompt(prompt: str) -> str:
+    """ "a red can of Coke" -> "a photo of a red can of Coke" (unchanged if already a photo).
+
+    CLIP was trained on captions of pictures, and on the team's snack photos a prompt worded
+    as a photo scores the real product clearly higher than the bare words do (DECISIONS.md).
+    """
+    text = " ".join(str(prompt).split())
+    if text.lower().startswith(_PHOTO_OPENINGS):
+        return text
+    return f"a photo of {text}"
+
+
+def item_prompts(item: CatalogItem) -> tuple[str, ...]:
+    """The prompts CLIP actually uses for an item.
+
+    Presets (``config/catalog.yaml``) are used exactly as written: their thresholds were
+    calibrated on that wording. Custom items (typed by a user, or a preset whose prompts a user
+    edited) always read as photos: every prompt starts with "a photo of", and "a photo of
+    <name>" is always included.
+    """
+    if item.preset:
+        return item.prompts or default_prompts(item.spoken)
+    out: list[str] = [GENERIC_PROMPT.format(spoken=item.spoken)]
+    for prompt in item.prompts:
+        photo = as_photo_prompt(prompt)
+        if photo not in out:
+            out.append(photo)
+    return tuple(out)
+
+
+def box_prompt(item: CatalogItem, label: str) -> str:
+    """The prompt for a box YOLO-World labelled ``label``: "a can of X" for a preset,
+    "a photo of a can of X" for a custom item."""
+    text = f"a {label} of {item.spoken}"
+    return text if item.preset else as_photo_prompt(text)
+
+
 @dataclass
 class Catalog:
     """Preset items plus the user's own, merged. Look up by id, spoken name or alias.
@@ -181,11 +222,11 @@ class Catalog:
         return {it.id: it.spoken for it in self.items if not it.non_item}
 
     def prompts_for(self, item: CatalogItem | str) -> tuple[str, ...]:
-        """Curated prompts, or one generated from the spoken name."""
+        """The prompts CLIP uses: a preset's curated ones, or a custom item's photo prompts."""
         it = self.item(item) if isinstance(item, str) else item
         if it is None:
             raise CatalogError(f"unknown catalog item {item!r}")
-        return it.prompts or default_prompts(it.spoken)
+        return item_prompts(it)
 
     def items_for(self, item_ids: list[str] | tuple[str, ...]) -> tuple[CatalogItem, ...]:
         """Catalog entries for a shopping list, synthesizing ones that are not in the catalog.
