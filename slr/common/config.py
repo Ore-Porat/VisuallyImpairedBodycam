@@ -386,6 +386,27 @@ class TTSConfig(_Model):
     sample_rate: int = 22050
 
 
+class VoiceConfig(_Model):
+    """``voice:`` block of server.yaml: spoken commands on the list editor page ("add chips").
+
+    Speech recognition runs offline on the laptop with Vosk. The model is downloaded once by
+    ``slr voice download-model``; without it the page still works, voice commands just say
+    they are not set up.
+    """
+    enabled: bool = True
+    model_dir: str = "models/vosk/vosk-model-small-en-us-0.15"
+    model_url: str = "https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip"
+    # Extra names per item ("coke" -> Coca-Cola). See config/voice_aliases.yaml.
+    aliases_file: str = "config/voice_aliases.yaml"
+    # Whisper re-reads a finished sentence that may name an item the word list does not know
+    # ("add kombucha"), so any product can be added by voice. Off = known items only.
+    whisper_enabled: bool = True
+    whisper_dir: str = "models/whisper"          # downloaded by `slr voice download-model`
+    whisper_model_gpu: str = "small.en"          # ~0.2 s per sentence on the laptop GPU
+    whisper_model_cpu: str = "base.en"           # ~1.2 s per sentence without a GPU
+    whisper_device: Literal["auto", "cuda", "cpu"] = "auto"
+
+
 class ServerPaths(_Model):
     """``paths:`` block of server.yaml: folders the server reads and writes (relative to repo)."""
     shopping_list: str = "data/shopping_list.yaml"
@@ -411,6 +432,7 @@ class ServerConfig(_Rooted):
     model: ModelConfig = ModelConfig()
     guidance: GuidanceConfig = GuidanceConfig()
     tts: TTSConfig = TTSConfig()
+    voice: VoiceConfig = VoiceConfig()
     paths: ServerPaths = ServerPaths()
     debug_view: DebugViewConfig = DebugViewConfig()
 

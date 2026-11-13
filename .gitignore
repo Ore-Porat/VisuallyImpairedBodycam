@@ -28,6 +28,7 @@ models/**/*.weights
 models/**/*.json
 !models/**/eval_report*.md
 models/voices/
+models/vosk/
 runs/
 *.pt
 yolo*.pt
@@ -48,3 +49,6 @@ Thumbs.db
 
 !models/hand_best.pt
 !models/yolov8s-worldv2.pt
+
+# Whisper speech models (downloaded by `slr voice download-model`)
+models/whisper/

@@ -41,6 +41,8 @@ dependencies = [
 #   piper-tts      text-to-speech that renders the spoken phrases
 #   zeroconf       mDNS, so the device can find the laptop by name
 #   sounddevice    audio playback (used by the simulated device)
+#   vosk           offline speech recognition for voice commands on the list page
+#   faster-whisper re-reads a spoken sentence that names a new item ("add kombucha")
 server = [
     "opencv-python>=4.8",
     "ultralytics>=8.3",
@@ -49,6 +51,8 @@ server = [
     "piper-tts>=1.2",
     "zeroconf>=0.130",
     "sounddevice>=0.4.6",   # sim device plays through laptop speakers
+    "vosk>=0.3.45",
+    "faster-whisper>=1.0",
 ]
 # Raspberry Pi Zero 2 W. No ML runtimes here (PRD rule 4). OpenCV comes from apt.
 #   gpiozero / lgpio  reading buttons and the mode switch
@@ -87,6 +91,10 @@ slr = "slr.cli:main"
 # Which folders are Python packages to install: everything under slr/ (not tests/ or training/).
 [tool.setuptools.packages.find]
 include = ["slr*"]
+
+# Non-Python files that ship inside the package: the list editor's stylesheet and script.
+[tool.setuptools.package-data]
+"slr.server" = ["web/*.css", "web/*.js"]
 
 # Settings for pytest (the test runner).
 #   testpaths     look for tests in the tests/ folder

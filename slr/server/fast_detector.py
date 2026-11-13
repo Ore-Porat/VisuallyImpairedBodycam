@@ -55,7 +55,7 @@ from typing import Callable, Sequence
 
 import numpy as np
 
-from slr.common.catalog import CatalogItem
+from slr.common.catalog import CatalogItem, box_prompt, item_prompts
 from slr.common.config import ModelConfig, ServerConfig
 from slr.common.types import Detection
 from slr.server.detector import pick_device
@@ -64,12 +64,11 @@ from slr.server.grocery_taxonomy import DETECTOR_CLASSES, HAND_CLASS
 log = logging.getLogger(__name__)
 
 # Container words used to turn YOLO's generic box label into a better prompt:
-# a box labelled "can" is compared with "a can of Coke" as well as the curated prompts.
+# a box labelled "can" is compared with "a can of Coke" (for a custom item, "a photo of a
+# can of Coke") as well as the curated prompts.
 # "product" is not a container, so it is left out.
 PROMPT_LABELS: tuple[str, ...] = tuple(label for label in DETECTOR_CLASSES if label != "product")
 
-# Prompt used for an item that has no curated prompts (a free-text item).
-GENERIC_PROMPT = "a photo of {spoken}"
 
 
 def _pooled(output):
@@ -177,7 +176,7 @@ class PromptBank:
 
 def prompt_bank_key(items: Sequence[CatalogItem], min_score: float, from_box: bool) -> tuple:
     """Everything that changes the text vectors (and therefore requires a rebuild)."""
-    return (tuple((it.id, it.spoken, it.prompts, it.min_score) for it in items),
+    return (tuple((it.id, it.spoken, it.prompts, it.min_score, it.preset) for it in items),
             float(min_score), bool(from_box))
 
 
@@ -212,12 +211,13 @@ def build_prompt_bank(items: Sequence[CatalogItem], encode: Callable[[list[str]]
     # Per item, per group name, the text ids that make up that vector.
     groups: list[dict[str, list[int]]] = []
     for item in items:
-        base = list(item.prompts) or [GENERIC_PROMPT.format(spoken=item.spoken)]
+        # Presets as written; custom items always worded as photos (catalog.item_prompts).
+        base = list(item_prompts(item))
         labels = PROMPT_LABELS if from_box else ()
-        generated = [text_id(f"a {label} of {item.spoken}") for label in labels]
+        generated = [text_id(box_prompt(item, label)) for label in labels]
         per_item: dict[str, list[int]] = {"__all__": [text_id(t) for t in base] + generated}
         for label in labels:
-            per_item[label] = [text_id(t) for t in base] + [text_id(f"a {label} of {item.spoken}")]
+            per_item[label] = [text_id(t) for t in base] + [text_id(box_prompt(item, label))]
         groups.append(per_item)
 
     features = np.asarray(encode(unique), dtype=np.float32)

@@ -50,3 +50,9 @@ classes:
   # Not a grocery item: the shopper's own hand, so guidance can steer it to the item later.
   # The guidance engine never names it as a found / wrong / identified item.
   hand: hand
+  # Demo-shelf brands (2026-11-12), in the same order as config/catalog.yaml.
+  lays: Lay's chips
+  oreo: Oreos
+  coca_cola_can: Coca-Cola
+  chicken_noodle_soup: chicken noodle soup
+  cheerios: Cheerios

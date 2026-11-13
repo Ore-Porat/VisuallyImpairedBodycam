@@ -190,3 +190,42 @@ items:
   hand:
     spoken: hand
     non_item: true
+  # Demo-shelf brands (2026-11-12). Added after hand so the GrocerEye indices above do not move.
+  # Prompts checked on the team's snack photos with training/calibrate_items.py (see
+  # DECISIONS.md): every brand reaches 0.90 precision on its own, and any two of them are told
+  # apart 99% of the time. The generic items above stay for other brands.
+  lays:
+    spoken: Lay's chips
+    prompts:
+      - "a bag of Lay's potato chips"
+      - "a yellow bag of Lay's chips"
+      - "a Lay's chip bag"
+    aliases: ["lays", "lay's", "lays chips"]
+  oreo:
+    spoken: Oreos
+    prompts:
+      - "a package of Oreo cookies"
+      - "a blue package of Oreo cookies"
+      - "an Oreo cookie pack"
+    aliases: ["oreos", "oreo cookies"]
+  coca_cola_can:
+    spoken: Coca-Cola
+    prompts:
+      - "a can of Coca-Cola"
+      - "a red Coca-Cola can"
+      - "a Coke can"
+    aliases: ["coke", "coca cola can", "coke can"]
+  chicken_noodle_soup:
+    spoken: chicken noodle soup
+    prompts:
+      - "a can of Campbell's chicken noodle soup"
+      - "a red and white Campbell's soup can"
+      - "a can of chicken noodle soup"
+    aliases: ["campbell's chicken noodle soup", "campbells chicken noodle soup"]
+  cheerios:
+    spoken: Cheerios
+    prompts:
+      - "a box of Cheerios cereal"
+      - "a yellow box of Cheerios"
+      - "a Cheerios cereal box"
+    aliases: ["cheerio"]

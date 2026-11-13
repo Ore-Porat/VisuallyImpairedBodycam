@@ -35,6 +35,7 @@ pip install -e ".[server,dev]"
 # The fast detector also needs the TensorRT runtime (installed by the server extra on Linux).
 
 slr clips download-voice        # one-time Piper voice download (needs internet once)
+slr voice download-model        # one-time speech models for voice commands (needs internet once)
 slr clips build-system          # render the device's local clips (already committed)
 slr list add pasta              # see valid items with: slr list classes
 slr sim
@@ -104,7 +105,9 @@ production camera or room:
 
 - **YOLO-World** (TensorRT) proposes generic product boxes.
 - **CLIP ViT-B/16** names each crop with one of the items on the shopping list. The preset
-  menu (with its prompts) is `config/catalog.yaml` (`pasta`, `soda`, `cookies`, ...).
+  menu (with its prompts) is `config/catalog.yaml` (`pasta`, `soda`, `cookies`, ...), and it
+  includes the demo-shelf brands `lays`, `oreo`, `coca_cola_can`, `chicken_noodle_soup` and
+  `cheerios`.
 - **EgoHands YOLO** supplies the shopper's hand boxes, which drive hand guidance.
 
 The two engines live in [`models/tensorrt/`](models/tensorrt/README.md). They are not committed
@@ -152,10 +155,45 @@ If the package is not installed, run the same commands from the repo root with
 | `slr bench --log data/logs/session_*.jsonl` | same numbers from a real session log |
 | `slr replay <video-or-folder> --script s.yaml` | cue timeline for a recording (FR-73) |
 | `slr clips build / build-system / download-voice` | speech clips |
+| `slr voice download-model` | offline speech model for voice commands |
+| `slr voice hear "add coke"` / `slr voice hear clip.wav` | show how a sentence or recording is understood |
 
 The shopping list can also be edited by a helper in any browser, with a screen reader if needed,
 at `http://<laptop>:8767/` while the server runs (FR-4). An open page updates itself within about
 a second when the device or another browser changes the list; no manual reload is needed.
+
+### Voice commands
+
+The shopper can also build the list by speaking. Open `http://localhost:8767/` **on the laptop
+itself** (browsers only allow the microphone on `localhost` or HTTPS, so the hotspot address
+will not work). Focus starts on the large "Speak a command" button; press it (or Alt+V), wait for
+the beep, and talk. Each item goes on the list as soon as it is heard, and each time you pause
+the page says what changed ("Added 3 water."). "add chips, milk and coke" can be said in one go
+or one item at a time; quantities work too ("add 3 water", "add two bottles of juice"). Press
+again (or Escape) to stop; listening also stops after 5 quiet seconds. A lower beep plays and
+the whole list is read back. Questions such as "what's on my list" are answered while listening.
+The microphone is muted while the page talks, so wait for each confirmation to finish.
+
+| Say | What happens |
+|---|---|
+| "add chips", "add Coca-Cola and milk", "I need spaghetti" | adds the items |
+| "add 3 water", "add two bottles of juice" | adds that many |
+| "add kombucha" (anything new) | asks "Add it as a new item?"; "yes" creates it |
+| "remove milk", "remove 2 water", "I don't need sugar" | removes them |
+| "what's on my list" | reads the list and what is found |
+| "what can I add" | reads every item the camera knows |
+| "undo" | takes back the last change |
+| "clear the list" | asks first; say "yes" or "no" |
+| "help" | lists the commands |
+
+Recognition runs offline on the laptop. Vosk listens for command words and item names, which
+keeps it fast and accurate; when a sentence names something new, Whisper re-reads it, so any
+product can be added by voice (it asks first). A new item's prompts are worded "a photo of …",
+which CLIP matches clearly better. Other names for an item ("Pepsi" for soda, "Doritos" for chips) live in
+`config/voice_aliases.yaml`; the catalog's own names and aliases, including items typed in
+on the page, work too. The page also has a text box that takes the same commands.
+If a screen reader already reads the replies, untick "Read replies aloud" to avoid hearing
+them twice.
 
 Session logs (frames, detections, state changes, cues, latency, loss) go to `data/logs/` as JSONL
 (FR-72).

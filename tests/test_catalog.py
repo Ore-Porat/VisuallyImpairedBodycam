@@ -93,7 +93,9 @@ def test_user_catalog_overrides_a_preset(tmp_path):
         "items": {"pasta": {"spoken": "pasta", "prompts": ["a blue pasta box"]}}
     })
     cat = load_catalog(presets, user)
-    assert cat.prompts_for("pasta") == ("a blue pasta box",)
+    # An edited preset is custom wording, so CLIP reads it as a photo (item_prompts).
+    assert cat.prompts_for("pasta") == ("a photo of pasta", "a photo of a blue pasta box")
+    assert cat.item("pasta").prompts == ("a blue pasta box",)   # stored as typed
     assert cat.is_preset("pasta") is False
     assert cat.is_preset("coke") is True
 
@@ -178,7 +180,7 @@ def test_user_prompts_can_be_saved(tmp_path):
     )
     cat.save_user()
     again = load_catalog(presets, user_path)
-    assert again.prompts_for("coke") == ("a green Coke can",)
+    assert again.item("coke").prompts == ("a green Coke can",)
 
 
 def test_empty_catalog_object_is_harmless():
@@ -198,11 +200,11 @@ def test_user_prompts_override_a_preset_and_can_be_restored(tmp_path):
     user_path = tmp_path / "user.yaml"
     cat = load_catalog(presets, user_path)
     cat.set_prompts("pasta", ["a blue pasta box", "a box of penne"])
-    assert cat.prompts_for("pasta") == ("a blue pasta box", "a box of penne")
+    assert cat.item("pasta").prompts == ("a blue pasta box", "a box of penne")
     assert cat.is_preset("pasta") is False         # the active entry is now the user's
 
     again = load_catalog(presets, user_path)
-    assert again.prompts_for("pasta") == ("a blue pasta box", "a box of penne")
+    assert again.item("pasta").prompts == ("a blue pasta box", "a box of penne")
 
     again.restore_prompts("pasta")
     assert again.prompts_for("pasta") == ("a package of pasta",)
@@ -215,7 +217,8 @@ def test_set_prompts_for_an_unknown_item_creates_it(tmp_path):
     cat.set_prompts("blue_gatorade", ["a blue sports drink bottle"],
                     spoken="blue Gatorade")
     assert cat.item("blue_gatorade").spoken == "blue Gatorade"
-    assert cat.prompts_for("blue_gatorade") == ("a blue sports drink bottle",)
+    assert cat.prompts_for("blue_gatorade") == ("a photo of blue Gatorade",
+                                                "a photo of a blue sports drink bottle")
 
 
 def test_prompt_editing_rejects_empty_and_huge_input(tmp_path):
@@ -304,3 +307,22 @@ def test_shipped_server_config_points_at_the_catalog():
     # The old key is gone for good: a config that still uses it must fail loudly.
     with pytest.raises(Exception):
         ModelConfig(classes_file="config/classes.yaml")
+
+
+# --------------------------------------------------------------------------- photo wording
+
+
+def test_custom_prompts_always_read_as_photos():
+    """Custom wording gets "a photo of" (better CLIP scores, DECISIONS.md); presets do not."""
+    from slr.common.catalog import as_photo_prompt, box_prompt, item_prompts
+
+    assert as_photo_prompt("a red can of Coke") == "a photo of a red can of Coke"
+    assert as_photo_prompt("A photo of a can") == "A photo of a can"     # not doubled
+    assert as_photo_prompt("  a   can ") == "a photo of a can"
+    custom = CatalogItem(id="kombucha", spoken="kombucha", prompts=("a glass bottle",),
+                         preset=False)
+    assert item_prompts(custom) == ("a photo of kombucha", "a photo of a glass bottle")
+    assert box_prompt(custom, "can") == "a photo of a can of kombucha"
+    preset = CatalogItem(id="pasta", spoken="pasta", prompts=("a package of pasta",))
+    assert item_prompts(preset) == ("a package of pasta",)
+    assert box_prompt(preset, "can") == "a can of pasta"
