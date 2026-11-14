@@ -4,8 +4,8 @@ body {
   font-family: system-ui, sans-serif;
   font-size: 1.15rem;
   line-height: 1.5;
-  max-width: 50rem;
-  margin: 1rem auto;
+  max-width: 68rem;
+  margin: .5rem auto;
   padding: 0 1rem;
   color: #111;
   background: #fff;
@@ -17,42 +17,42 @@ button, input { font-size: 1rem; padding: .3rem .6rem; }
 :focus { outline: 3px solid #1a5fb4; outline-offset: 2px; }
 
 .inline { display: inline; }
-#status { font-weight: bold; min-height: 1.5em; }
+h1 { margin: .4rem 0 .2rem; }
+h2 { margin: .8rem 0 .3rem; }
+p { margin: .4rem 0; }
+#status { font-weight: bold; min-height: 1.5em; margin: 0; }
+#voice { margin: .2rem 0; }
+/* The hint and the checkbox share one line under the button. */
+#voice-hint, #speak-option { display: inline-block; margin: .2rem 1.5rem .2rem 0; }
 #list-heading:focus { outline: none; }
 
-.rows { padding-left: 1.5rem; }
-.rows li { margin-bottom: .5rem; }
-.rows img { vertical-align: middle; margin-right: .4rem; }
-.rows li.found .info { color: #555; text-decoration: line-through; }
-.whole { margin: 1rem 0; }
+/* The list as a plain table: one row per item. */
+.rows { border-collapse: collapse; width: 100%; }
+.rows th, .rows td { text-align: left; padding: .3rem .6rem; border-bottom: 1px solid #ccc; }
+.rows td, .rows button { white-space: nowrap; }
+.rows thead th { border-bottom: 2px solid #111; }
+.rows .num { color: #555; width: 1.5rem; }
+.rows .name { font-weight: normal; }
+.rows tr.current .name { font-weight: bold; }
+.rows tr.current { background: #eaf1fb; }
+.rows tr.found .name, .rows tr.found .state { color: #555; }
+.rows tr.found .name { text-decoration: line-through; }
+.rows .tag { font-weight: bold; color: #1a5fb4; }
+/* Text for screen readers only (the headings of the two button columns). */
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.whole { margin: .6rem 0; }
 
-.grid {
-  list-style: none;
-  padding: 0;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(8.5rem, 1fr));
-  gap: .75rem;
-}
-.tile button {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  width: 100%;
-  background: #f4f4f4;
-  border: 1px solid #bbb;
-  border-radius: 4px;
-}
-.tile button:hover { background: #e8e8e8; }
-.tile.on button { border: 2px solid #26a269; }
-.tile .count { display: block; text-align: center; font-size: .9rem; color: #1e7a4c; min-height: 1.3em; }
-.tile[hidden] { display: none; }
+/* The list and the add box sit side by side; on a narrow screen they stack. */
+.columns { display: flex; flex-wrap: wrap; gap: 0 2.5rem; align-items: flex-start; }
+.columns > section { flex: 1 1 16rem; min-width: 0; }
+.columns > section:first-child { flex: 2 1 28rem; }
 
-/* The voice button: big enough to find, with a clear "listening" state. */
+/* The voice button: compact but still an easy target, with a clear "listening" state. */
 .talk {
-  font-size: 1.4rem;
+  font-size: 1.1rem;
   font-weight: bold;
-  padding: 1rem 2rem;
-  min-width: 16rem;
+  padding: .6rem 1.2rem;
+  min-height: 44px;
   color: #fff;
   background: #1a5fb4;
   border: 0;
@@ -64,6 +64,3 @@ button, input { font-size: 1rem; padding: .3rem .6rem; }
 .talk.busy { opacity: .7; cursor: progress; }
 #voice[hidden], #voice-hint[hidden], #speak-option[hidden] { display: none; }
 .heard { color: #1e7a4c; font-weight: bold; min-height: 1.5em; margin: 0; }
-
-h3 { margin-bottom: .4rem; }
-.grid[hidden] { display: none; }

@@ -1,4 +1,4 @@
-"""The shopping list web editor (FR-4): page, picture catalog, static files and JSON posts."""
+"""The shopping list web editor (FR-4): page, static files and JSON posts."""
 
 import json
 import re
@@ -10,25 +10,11 @@ import pytest
 
 from slr.common.catalog import load_catalog
 from slr.common.types import FOUND, PENDING
-from slr.server.catalog import AISLES, ART, aisles_for, art_for
 from slr.server.list_web import STATIC, HttpServer, make_handler, render_page, state_payload
 from slr.server.session import ListError, ListItem
 
 ROOT = Path(__file__).resolve().parents[1]
 KNOWN = load_catalog(ROOT / "config/catalog.yaml").item_map()
-
-
-def test_every_grocery_class_has_a_picture_and_an_aisle():
-    assert set(KNOWN) <= set(ART)
-    placed = [i for _, ids in AISLES for i in ids]
-    assert sorted(placed) == sorted(KNOWN)
-    assert len(placed) == len(set(placed))
-
-
-def test_unknown_classes_fall_back_to_other_and_a_bag():
-    known = {"pasta": "pasta", "kimchi": "kimchi"}
-    assert aisles_for(known) == [("Pantry", ["pasta"]), ("Other", ["kimchi"])]
-    assert art_for("kimchi").startswith("<svg")
 
 
 def test_page_works_without_javascript():
@@ -37,12 +23,15 @@ def test_page_works_without_javascript():
     # Every action is a real form post.
     for action in ("add", "remove", "current", "reset", "clear"):
         assert f'action="/list/{action}"' in page
-    # One add form per catalog item (with a spoken-name button), plus the free-text box.
-    assert len(re.findall(r'action="/list/add"', page)) == len(KNOWN) + 1
-    assert "Add Tomato sauce</button>" in page
-    assert "Remove Pasta</button>" in page and "Make Pasta current</button>" in page
+    # Items are added only by voice or the free-text box (with suggestions): no picture catalog.
+    assert len(re.findall(r'action="/list/add"', page)) == 1
+    assert '<option value="tomato sauce">' in page
+    assert "<img" not in page and 'class="tile' not in page
+    # Short visible button text; the item's name is in the accessible label.
+    assert 'aria-label="Remove Pasta">Remove</button>' in page
+    assert 'aria-label="Make Pasta current">Make current</button>' in page
     assert 'role="status"' in page and "Added pasta." in page
-    assert "Current item: <strong>Tomato sauce</strong>" in page
+    assert '<th scope="row" class="name">Tomato sauce</th>' in page and '<span class="tag">Current</span>' in page
     assert '<noscript><meta http-equiv="refresh"' in page
 
 
@@ -87,15 +76,14 @@ def _get(url):
         return e.code, e.headers.get("Content-Type"), b""
 
 
-def test_static_files_and_pictures_are_served(server):
+def test_static_files_are_served(server):
     base, _ = server
     assert set(STATIC) == {"editor.css", "editor.js"}
     assert _get(base + "/static/editor.css")[:2] == (200, "text/css; charset=utf-8")
-    assert _get(base + "/catalog/milk.svg")[:2] == (200, "image/svg+xml")
     # Nothing outside the bundled files, and no path tricks.
     assert _get(base + "/static/../list_web.py")[0] == 404
     assert _get(base + "/static/catalog.py")[0] == 404
-    assert _get(base + "/catalog/..%2Fsecret.svg")[0] == 404
+    assert _get(base + "/catalog/milk.svg")[0] == 404   # the item pictures are gone
 
 
 def test_post_answers_json_for_the_script_and_redirects_otherwise(server):
@@ -146,8 +134,11 @@ ENTRY = {
 
 def test_render_items_marks_status_and_current_item():
     markup = render_items([ListItem("cheerios"), ListItem("milk", FOUND)], 1, SMALL)
-    assert 'Cheerios: <span class="state">not found yet</span>' in markup
-    assert 'Milk: <span class="state">found</span> (current item)' in markup
+    assert '<table class="rows">' in markup
+    assert '<th scope="row" class="name">Cheerios</th><td class="state">Not found</td>' in markup
+    assert ('<tr class="found current" data-name="milk"><td class="num">2</td>'
+            '<th scope="row" class="name">Milk</th><td class="state">Found</td>'
+            '<td class="pick"><span class="tag">Current</span></td>') in markup
     assert 'data-name="cheerios"' in markup
 
 
@@ -183,12 +174,14 @@ def test_render_page_offers_free_text_with_preset_suggestions():
     assert 'name="item" list="item-names"' in page
     assert '<datalist id="item-names">' in page
     assert '<option value="Milk"></option>' in page
-    assert 'href="/prompts"' in page
+    # The prompt editor stays at /prompts but is not linked from the list page.
+    assert 'href="/prompts"' not in page
 
 
-def test_render_items_marks_items_with_generated_prompts():
+def test_render_items_does_not_mention_generated_prompts():
+    # The list stays plain: prompt quality is only shown on the prompts page.
     markup = render_items([ListItem("cheerios"), ListItem("milk")], 0, SMALL, uncurated={"milk"})
-    assert markup.count("generated prompts") == 1
+    assert "generated prompts" not in markup
 
 
 def test_prompt_index_and_edit_page_render():

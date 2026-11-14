@@ -442,9 +442,6 @@ class ServerApp:
             self._refresh_vocabulary()
             spoken = self.items_catalog.spoken(cls)
             msg = f"Added {spoken}."
-            if cls in sp.uncurated_items():
-                msg += (" It uses generated prompts; edit them on the Prompts page for better"
-                        " accuracy.")
         elif op == "remove":
             cls = sp.remove(arg)
             msg = f"Removed {self.items_catalog.spoken(cls)}."

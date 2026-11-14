@@ -1,7 +1,7 @@
 """Small HTTP server on the laptop: clip downloads for the device (FR-53) and an accessible
 shopping list editor for the helper (FR-4).
 
-The editor is a picture catalog of every item the model knows plus the live list. Every
+The editor is the live list plus voice commands and a free-text add box. Every
 control is an ordinary HTML form with a real button and a real label, so the page works with a
 keyboard, any screen reader and even without JavaScript. When scripts run, ``web/editor.js``
 submits the same forms in the background, keeps focus where it was, and polls the list so
@@ -15,8 +15,7 @@ A tiny web server built from Python's standard library. It answers these request
    the device downloads the speech clips the laptop rendered (see ``clips.py``).
 2. From a person's browser (a helper, family member or the shopper with a screen reader):
    the shopping list page at ``http://<laptop>:8767/``, its stylesheet and script under
-   ``/static/``, the item pictures under ``/catalog/<item>.svg`` (drawn in ``catalog.py``),
-   and ``/list/state.json`` for live updates.
+   ``/static/``, and ``/list/state.json`` for live updates.
 3. Form posts to ``/list/<op>`` (add, remove, current, reset, clear). A normal browser post is
    answered with a redirect back to the page; the script asks for JSON instead.
 4. The item prompt editor at ``/prompts``: the CLIP sentences for each item, which is how a
@@ -65,7 +64,6 @@ from typing import Callable
 from urllib.parse import parse_qs, quote, urlparse
 
 from slr.common.types import FOUND
-from slr.server.catalog import aisles_for, art_for
 from slr.server.voice import VoiceUnavailable
 
 log = logging.getLogger(__name__)
@@ -135,71 +133,50 @@ def item_counts(items) -> dict[str, int]:
 # --------------------------------------------------------------------------- page pieces
 
 def render_items(items, current: int, known: dict[str, str], uncurated=()) -> str:
-    """The list part of the page: a line about the current item and the numbered list.
+    """The list part of the page: how many are found, then a table with one row per item.
 
+    Columns: number, item, status, and the row's buttons. The current item's row is marked.
     The browser script swaps this whole fragment when the list changes. Buttons carry a
-    ``data-focus`` key so the script can put keyboard focus back on the same control.
-    uncurated: item ids that use a generated prompt. They are marked so the helper knows the
-    detection will be weaker until the prompts are edited.
+    ``data-focus`` key so the script can put keyboard focus back on the same control, and an
+    ``aria-label`` with the item's name ("Remove Oreos") so a screen reader says which row a
+    button belongs to while the visible text stays short.
+    uncurated: accepted for older callers; the list no longer marks generated prompts.
     """
     esc = html.escape
-    uncurated = set(uncurated)
     if not items:
-        return "<p>The list is empty. Add items from the catalog below.</p>"
+        return "<p>The list is empty.</p>"
 
     found = sum(1 for it in items if it.status == FOUND)
-    cur_name = esc(display_name(items[current].name, known))
     rows = []
     for i, it in enumerate(items):
         name = esc(display_name(it.name, known))
-        status = "found" if it.status == FOUND else "not found yet"
-        cur = " (current item)" if i == current else ""
-        hint = ('<span class="hint"> (generated prompts)</span>'
-                if it.name in uncurated else "")
-        make_current = "" if i == current else (
-            '<form method="post" action="/list/current" class="inline" data-ajax>'
-            f'<input type="hidden" name="index" value="{i}">'
-            f'<button type="submit" data-focus="current-{i}">Make {name} current</button></form> '
-        )
-        rows.append(
-            f'<li class="{"found" if it.status == FOUND else ""}" data-name="{esc(it.name)}">'
-            f'<img src="/catalog/{esc(it.name)}.svg" alt="" width="32" height="32">'
-            f'<span class="info">{name}: <span class="state">{status}</span>{cur}{hint}</span> '
-            f'{make_current}'
-            '<form method="post" action="/list/remove" class="inline" data-ajax>'
-            f'<input type="hidden" name="item" value="{esc(it.name)}">'
-            f'<button type="submit" data-focus="remove-{i}">Remove {name}</button></form></li>'
-        )
-    return (f'<p>Current item: <strong>{cur_name}</strong>. {found} of {len(items)} found.</p>'
-            f'<ol class="rows">{"".join(rows)}</ol>')
-
-
-def render_catalog(known: dict[str, str], counts: dict[str, int]) -> str:
-    """Every aisle with a picture per item; each picture is a button that adds the item."""
-    esc = html.escape
-    sections = []
-    for title, ids in aisles_for(known):
-        tiles = []
-        for item in ids:
-            name = esc(display_name(item, known))
-            n = counts.get(item, 0)
-            tiles.append(
-                f'<li class="tile{" on" if n else ""}" data-item="{esc(item)}" '
-                f'data-search="{esc((known[item] + " " + item + " " + title).lower())}">'
-                '<form method="post" action="/list/add" data-ajax>'
-                f'<input type="hidden" name="item" value="{esc(item)}">'
-                f'<button type="submit" data-focus="add-{esc(item)}">'
-                f'<img src="/catalog/{esc(item)}.svg" alt="" width="96" height="96">'
-                f'Add {name}</button></form>'
-                f'<span class="count">{count_text(n)}</span></li>'
+        is_found = it.status == FOUND
+        classes = " ".join(c for c, on in (("found", is_found), ("current", i == current)) if on)
+        if i == current:
+            pick = '<span class="tag">Current</span>'
+        else:
+            pick = (
+                '<form method="post" action="/list/current" class="inline" data-ajax>'
+                f'<input type="hidden" name="index" value="{i}">'
+                f'<button type="submit" data-focus="current-{i}" '
+                f'aria-label="Make {name} current">Make current</button></form>'
             )
-        sections.append(f'<h3>{esc(title)}</h3><ul class="grid">{"".join(tiles)}</ul>')
-    return "".join(sections)
-
-
-def count_text(n: int) -> str:
-    """The note under a catalog picture: nothing, "on list" or "on list (2)"."""
-    return "" if not n else "on list" if n == 1 else f"on list ({n})"
+        rows.append(
+            f'<tr class="{classes}" data-name="{esc(it.name)}">'
+            f'<td class="num">{i + 1}</td>'
+            f'<th scope="row" class="name">{name}</th>'
+            f'<td class="state">{"Found" if is_found else "Not found"}</td>'
+            f'<td class="pick">{pick}</td>'
+            '<td><form method="post" action="/list/remove" class="inline" data-ajax>'
+            f'<input type="hidden" name="item" value="{esc(it.name)}">'
+            f'<button type="submit" data-focus="remove-{i}" '
+            f'aria-label="Remove {name}">Remove</button></form></td></tr>'
+        )
+    return (f'<p>{found} of {len(items)} found.</p>'
+            '<table class="rows"><thead><tr><th scope="col">#</th><th scope="col">Item</th>'
+            '<th scope="col">Status</th><th scope="col"><span class="sr">Current item</span></th>'
+            '<th scope="col"><span class="sr">Remove</span></th></tr></thead>'
+            f'<tbody>{"".join(rows)}</tbody></table>')
 
 
 def state_payload(items, current: int, known: dict[str, str], uncurated=()) -> dict:
@@ -249,25 +226,19 @@ def render_page(items, current: int, known: dict[str, str], message: str = "",
 <!-- Live region: screen readers announce the confirmation message after each change. -->
 <p role="status" id="status">{esc(message)}</p>
 
-<h2>Speak a command</h2>
 <!-- The talk button only works with the script (it records the microphone), so it starts hidden. -->
 <p id="voice" hidden>
   <button type="button" id="talk" class="talk" aria-pressed="false" aria-describedby="voice-hint">
     Speak a command<span class="listening" aria-hidden="true"> (listening)</span></button>
 </p>
 <p id="heard" class="heard" aria-hidden="true"></p>
-<p id="voice-hint" hidden>Press the button or Alt+V, wait for the beep, then talk: "add chips",
-"add 3 water", "add milk and coke", "remove sugar", "what's on my list" or "help". Items go on
-the list as soon as they are heard, and each time you pause you hear what was added. Press
-again or Escape to stop; listening also stops after a few quiet seconds, and then your whole
-list is read back.</p>
+<p id="voice-hint" hidden>Wait for the beep, then talk. Try "add Oreos" or "what's on my list".</p>
 <p id="speak-option" hidden><label><input type="checkbox" id="speak-replies" checked>
-  Read replies aloud (turn off if your screen reader already reads them)</label></p>
-<form method="post" action="/list/say" data-ajax data-say>
-  <label for="say">Or type a command: </label><input id="say" name="text" autocomplete="off">
-  <button type="submit">Send</button>
-</form>
+  Read replies aloud</label></p>
 
+<!-- Two columns side by side (stacked on a narrow screen): the list, then the add box. -->
+<div class="columns">
+<section>
 <h2 id="list-heading" tabindex="-1">Items</h2>
 <div id="items" data-version="{version}">{render_items(items, current, known, uncurated)}</div>
 <div class="whole">
@@ -278,24 +249,20 @@ list is read back.</p>
     <button type="submit" data-focus="clear"{disabled}>Remove every item</button>
   </form>
 </div>
+</section>
 
-<p class="hint">Detection quality comes from the prompts. <a href="/prompts">Edit item prompts</a>.</p>
-
+<section>
 <h2>Add an item</h2>
 <!-- Free text with preset suggestions. A new name becomes a catalog item with generated
      prompts, which can then be edited on the prompts page. -->
 <form method="post" action="/list/add" data-ajax data-reset>
-  <label for="item">Type any item: </label>
+  <label for="item">Type any item:</label><br>
   <input id="item" name="item" list="item-names" autocomplete="off" required>
   <datalist id="item-names">{options}</datalist>
   <button type="submit" data-focus="add-typed">Add item</button>
-  <p class="hint">Pick a suggestion or type any product name. New items use generated prompts;
-  edit them on the <a href="/prompts">item prompts page</a> for better accuracy.</p>
 </form>
-<p>Or pick one of the preset items:</p>
-<p id="search" hidden><label for="q">Search: </label><input id="q" type="search" autocomplete="off"></p>
-<p id="no-match" hidden>No items match.</p>
-{render_catalog(known, item_counts(items))}
+</section>
+</div>
 </main>
 <script src="{static_url("editor.js")}" defer></script>
 </body>
@@ -513,7 +480,7 @@ def make_handler(get_page_data: Callable[[], tuple], list_op: ListOp,
             return state_payload(items, current, known, uncurated)
 
         def do_GET(self):
-            """Answer a GET: the manifest, a clip, a static file, a picture, the list page or
+            """Answer a GET: the manifest, a clip, a static file, the list page or
             the prompt editor."""
             url = urlparse(self.path)
             if url.path == "/clips/manifest.json":
@@ -539,14 +506,6 @@ def make_handler(get_page_data: Callable[[], tuple], list_op: ListOp,
                     self._send(404, b"not found", "text/plain")
                     return
                 self._send(200, entry[0], entry[1], cache="public, max-age=31536000, immutable")
-                return
-            if url.path.startswith("/catalog/") and url.path.endswith(".svg"):
-                name = url.path[len("/catalog/"):-len(".svg")]
-                if not CLIP_NAME.match(name):
-                    self._send(404, b"not found", "text/plain")
-                    return
-                self._send(200, art_for(name).encode(), "image/svg+xml",
-                           cache="public, max-age=86400")
                 return
             if url.path in ("/", "/list"):
                 # ``?msg=...`` carries the confirmation text after a redirect (see do_POST).
@@ -726,11 +685,7 @@ def serve_list_only(shopping, catalog, host: str, port: int, cfg=None) -> None:
             if op == "add":
                 cls = shopping.add(arg)          # a new name becomes a catalog item
                 shopping.refresh_known()
-                msg = f"Added {catalog.spoken(cls)}."
-                if cls in shopping.uncurated_items():
-                    msg += (" It uses generated prompts; edit them on the Prompts page for"
-                            " better accuracy.")
-                return msg
+                return f"Added {catalog.spoken(cls)}."
             if op == "remove":
                 cls = shopping.remove(arg)
                 return f"Removed {catalog.spoken(cls)}."
@@ -767,7 +722,9 @@ def serve_list_only(shopping, catalog, host: str, port: int, cfg=None) -> None:
     server.start()
     print(f"Shopping list editor on http://localhost:{server.port}/  (Ctrl+C to stop)", flush=True)
     try:
-        server.thread.join()
+        # Join in short steps: on Windows a join() with no timeout never sees Ctrl+C.
+        while server.thread.is_alive():
+            server.thread.join(0.5)
     except KeyboardInterrupt:
         pass
     finally:

@@ -4,7 +4,6 @@
 // - forms marked data-ajax are sent in the background and the page is patched in place,
 //   keeping keyboard focus on the same control;
 // - the list is polled once a second so changes from the bodycam appear on their own;
-// - the catalog can be filtered with the search box;
 // - voice commands: the "Speak a command" button streams the microphone to the laptop
 //   (speech recognition runs there, offline); items are added while the shopper talks, and
 //   a summary is spoken when listening stops ("Added chips and milk. 3 items on your list.").
@@ -49,11 +48,6 @@
     items.dataset.version = version;
     items.innerHTML = state.html;
 
-    document.querySelectorAll(".tile").forEach(function (tile) {
-      var n = state.counts[tile.dataset.item] || 0;
-      tile.classList.toggle("on", n > 0);
-      tile.querySelector(".count").textContent = !n ? "" : n === 1 ? "on list" : "on list (" + n + ")";
-    });
     document.querySelectorAll(".whole button").forEach(function (b) { b.disabled = state.empty; });
 
     restoreFocus(key, wasInList);
@@ -100,24 +94,6 @@
   }
   setInterval(refresh, 1000);
   document.addEventListener("visibilitychange", function () { if (!document.hidden) refresh(); });
-
-  // Search box: only shown when this script runs.
-  var q = document.getElementById("q");
-  document.getElementById("search").hidden = false;
-  q.addEventListener("input", function () {
-    var term = q.value.trim().toLowerCase();
-    var any = false;
-    document.querySelectorAll(".tile").forEach(function (tile) {
-      tile.hidden = term !== "" && tile.dataset.search.indexOf(term) === -1;
-      if (!tile.hidden) any = true;
-    });
-    document.querySelectorAll(".grid").forEach(function (grid) {
-      var shown = grid.querySelector(".tile:not([hidden])") !== null;
-      grid.hidden = !shown;
-      grid.previousElementSibling.hidden = !shown;  // the aisle heading
-    });
-    document.getElementById("no-match").hidden = any;
-  });
 
   // ------------------------------------------------------------------ voice commands
   //

@@ -43,7 +43,8 @@ aliases:
   tea: [tea bags, green tea]
   tomato_sauce: [pasta sauce, marinara, spaghetti sauce]
   vinegar: []
-  water: [bottled water, sparkling water]
+  water: [bottled water, sparkling water, water bottle, water bottles, bottle of water,
+          bottles of water]
   cookies: [cookie, biscuits, chips ahoy]
   # Demo-shelf brands. The catalog already knows their names and typed aliases ("coke",
   # "oreos"); these are extra ways to say them.
